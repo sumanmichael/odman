@@ -2,44 +2,42 @@
 
 A command-line tool to upload files to a specific user's OneDrive using Microsoft Graph API with app-only authentication. Ideal for automated scripts, backups, or any process without user interaction.
 
-## Features
-
-- **App-Only Authentication:** Secure, non-interactive client credentials flow.
-- **Resumable Large File Uploads:** Automatically handles large files (>4MB).
-- **Simple CLI Interface:** Easy to use command-line arguments.
-- **Secure Credential Management:** Reads credentials from environment variables.
-- **Cross-Platform:** Works on Linux, macOS, and Windows.
-
-## Prerequisites
-
-1.  **Microsoft Entra ID (Azure AD) App Registration:**
-
-    - Configure the app for client credentials flow.
-    - Grant `Files.ReadWrite.All` **Application** permission for Microsoft Graph.
-    - Grant admin consent for the permission.
-    - Collect the **Application (client) ID**, **Directory (tenant) ID**, **Client Secret Value**, and the **User ID** of the target OneDrive account.
-
-2.  **Local Software:**
-    - Python 3.11+
-    - Git
-
 ## Installation
 
-1.  **Clone the repository:**
+### Using `pipx` (Recommended)
 
-    ```sh
-    git clone https://github.com/sumanmichael/onedriveuploader.git
-    cd onedriveuploader
-    ```
+The easiest way to install the tool is with `pipx`, which installs it in an isolated environment.
 
-2.  **Install with `pip`:**
-    ```sh
-    pip install .
-    ```
+```sh
+pipx install git+https://github.com/sumanmichael/onedriveuploader.git
+```
 
-## Configuration
+### Using `pip` (from source)
 
-Set the following environment variables:
+If you want to install it from a local clone (e.g., for development):
+
+```sh
+git clone https://github.com/sumanmichael/onedriveuploader.git
+cd onedriveuploader
+pip install .
+```
+
+## Usage Guide
+
+### 1. Prerequisites: Microsoft Entra ID App Registration
+
+Before using the tool, you need to register an application in Microsoft Entra ID (Azure AD) and grant it `Files.ReadWrite.All` **Application** permission for Microsoft Graph. An administrator must grant admin consent for this permission.
+
+You will need to collect the following credentials from your app registration:
+
+- **Application (client) ID**
+- **Directory (tenant) ID**
+- **Client Secret Value**
+- **User ID** (The User Principal Name or Object ID of the target user)
+
+### 2. Configure Environment Variables
+
+The tool reads credentials from environment variables.
 
 **Linux / macOS** (`~/.bashrc` or `~/.zshrc`):
 
@@ -61,11 +59,11 @@ $env:ONEDRIVE_USER_ID="<Target_User_ID_or_Email>"
 
 Remember to reload your shell or open a new terminal to apply the changes.
 
-## Usage
+### 3. Run the Uploader
 
-Run the tool from any directory:
+Once configured, you can run the tool from any directory.
 
-#### **Basic Upload**
+#### Basic Upload
 
 To upload a file to the root of the target user's OneDrive:
 
@@ -73,15 +71,13 @@ To upload a file to the root of the target user's OneDrive:
 onedriveuploader "/path/to/your/local/file.txt"
 ```
 
-#### **Upload to a Specific Folder**
+#### Upload to a Specific Folder
 
-To upload a file to a specific folder (e.g., Documents/Backups), use the -d or --destination flag. If the folder does not exist, it will be created.
+To upload a file to a specific folder (e.g., `Documents/Backups`), use the `-d` or `--destination` flag. If the folder does not exist, it will be created.
 
 ```sh
 onedriveuploader "/path/to/server-backup.zip" -d "Server/DailyBackups"
 ```
-
-The tool will print its progress, including token acquisition, the upload method used (small vs. large), and the final confirmation from the Graph API upon success.
 
 ## License
 
