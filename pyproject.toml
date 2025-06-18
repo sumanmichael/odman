@@ -1,0 +1,18 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "onedriveuploader"
+version = "0.1.0"
+description = "A CLI tool to upload files to a user's OneDrive via app-only auth."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "msal>=1.32.3",
+    "requests>=2.32.4",
+]
+
+
+[project.scripts]
+onedriveuploader = "onedriveuploader.main:main"
