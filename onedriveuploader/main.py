@@ -4,6 +4,7 @@ import argparse
 import json
 import msal
 import requests
+from tqdm import tqdm
 
 # --- CONFIGURATION ---
 # This script reads credentials from environment variables for security.
@@ -125,29 +126,35 @@ class OneDriveUploader:
 
             file_size = os.path.getsize(file_path)
             with open(file_path, "rb") as f:
-                start_byte = 0
-                while start_byte < file_size:
-                    chunk = f.read(CHUNK_SIZE)
-                    chunk_len = len(chunk)
-                    end_byte = start_byte + chunk_len - 1
-                    chunk_headers = {
-                        "Content-Length": str(chunk_len),
-                        "Content-Range": f"bytes {start_byte}-{end_byte}/{file_size}",
-                    }
-                    print(
-                        f"Uploading chunk: bytes {start_byte}-{end_byte}/{file_size}..."
-                    )
+                with tqdm(
+                    total=file_size,
+                    unit="B",
+                    unit_scale=True,
+                    unit_divisor=1024,
+                    desc=f"Uploading {os.path.basename(file_path)}",
+                ) as pbar:
+                    start_byte = 0
+                    upload_response = None
+                    while start_byte < file_size:
+                        chunk = f.read(CHUNK_SIZE)
+                        chunk_len = len(chunk)
+                        end_byte = start_byte + chunk_len - 1
+                        chunk_headers = {
+                            "Content-Length": str(chunk_len),
+                            "Content-Range": f"bytes {start_byte}-{end_byte}/{file_size}",
+                        }
 
-                    upload_response = requests.put(
-                        upload_url, headers=chunk_headers, data=chunk
-                    )
-                    upload_response.raise_for_status()
+                        upload_response = requests.put(
+                            upload_url, headers=chunk_headers, data=chunk
+                        )
+                        upload_response.raise_for_status()
+                        pbar.update(chunk_len)
+                        start_byte += chunk_len
 
-                    if upload_response.status_code in [200, 201]:
-                        print("\n✅ Large file uploaded successfully!")
-                        print(json.dumps(upload_response.json(), indent=2))
+            if upload_response and upload_response.status_code in [200, 201]:
+                print("\n✅ Large file uploaded successfully!")
+                print(json.dumps(upload_response.json(), indent=2))
 
-                    start_byte += chunk_len
         except requests.exceptions.RequestException as e:
             print(f"Error during large file upload: {e}")
             if e.response is not None:
