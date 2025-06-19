@@ -23,7 +23,7 @@ if ! git diff-index --quiet HEAD --; then
 fi
 
 # Check if commitizen is installed
-if ! command -v cz &> /dev/null; then
+if ! uv tool run cz --help &> /dev/null; then
     echo "📦 Installing commitizen..."
     uv tool install commitizen
 fi
