@@ -23,7 +23,7 @@ if ! git diff-index --quiet HEAD --; then
 fi
 
 # Check if commitizen is installed
-if ! uv tool run cz --help &> /dev/null; then
+if ! cz --help &> /dev/null; then
     echo "📦 Installing commitizen..."
     uv tool install commitizen
 fi
@@ -45,12 +45,12 @@ else
 fi
 
 # Get current version
-CURRENT_VERSION=$(uv tool run cz version --project)
+CURRENT_VERSION=$(cz version --project)
 echo "📋 Current version: $CURRENT_VERSION"
 
 # Preview what would be bumped
 echo "🔍 Checking what would be bumped..."
-NEXT_VERSION=$(uv tool run cz bump --dry-run | grep "bump: version" | cut -d' ' -f3 || echo "no-bump")
+NEXT_VERSION=$(cz bump --dry-run | grep "bump: version" | cut -d' ' -f3 || echo "no-bump")
 
 if [ "$NEXT_VERSION" = "no-bump" ]; then
     echo "ℹ️  No version bump needed (no feat/fix commits since last release)"
@@ -72,10 +72,10 @@ fi
 
 # Bump version and update changelog
 echo "📝 Bumping version and updating changelog..."
-uv tool run cz bump --changelog --yes
+cz bump --changelog --yes
 
 # Get the new version
-NEW_VERSION=$(uv tool run cz version --project)
+NEW_VERSION=$(cz version --project)
 echo "✅ Version bumped to: $NEW_VERSION"
 
 # Push changes and tags
