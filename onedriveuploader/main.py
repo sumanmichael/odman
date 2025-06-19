@@ -102,7 +102,7 @@ class OneDriveUploader:
                 continue
 
             parent_path_for_url = (
-                "root" if not current_path_for_api else f"root:/{current_path_for_api}"
+                "root" if not current_path_for_api else f"root:/{current_path_for_api}:"
             )
             create_folder_url = f"{api_base_url}/{parent_path_for_url}/children"
 
