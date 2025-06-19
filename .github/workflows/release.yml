@@ -33,7 +33,8 @@ jobs:
         run: |
           {
             echo 'changelog<<EOF'
-            cz changelog $(echo ${GITHUB_REF#refs/tags/}) --dry-run     echo 'EOF'
+            cz changelog --rev ${GITHUB_REF#refs/tags/} --dry-run
+            echo 'EOF'
           } >> "$GITHUB_OUTPUT"
 
       - name: Build package
