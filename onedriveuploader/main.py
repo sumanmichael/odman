@@ -1,10 +1,19 @@
 import os
 import sys
 import argparse
-import json
 import msal
 import requests
-from tqdm import tqdm
+from rich.console import Console
+from rich.panel import Panel
+from rich.progress import (
+    Progress,
+    TextColumn,
+    BarColumn,
+    TaskProgressColumn,
+)
+from rich.table import Table
+from rich import box
+from datetime import datetime
 
 # --- CONFIGURATION ---
 # This script reads credentials from environment variables for security.
@@ -35,6 +44,9 @@ SCOPES = ["https://graph.microsoft.com/.default"]  # Scope for confidential clie
 CHUNK_SIZE = 10 * 1024 * 1024  # 10 MiB
 SMALL_FILE_THRESHOLD = 4 * 1024 * 1024  # 4 MiB
 
+# Initialize Rich console
+console = Console()
+
 
 class OneDriveUploader:
     """
@@ -48,12 +60,21 @@ class OneDriveUploader:
         self.authority = f"https://login.microsoftonline.com/{tenant_id}"
         self.access_token = self._get_access_token()
 
+        # Upload statistics
+        self.stats = {
+            "total_files": 0,
+            "successful_uploads": 0,
+            "failed_uploads": 0,
+            "total_size": 0,
+            "uploaded_size": 0,
+            "start_time": datetime.now(),
+        }
+
     def _get_access_token(self):
         """
         Acquires an app-only access token using the client credentials flow.
         There is no user interaction and no token cache.
         """
-        print("Attempting to acquire app-only access token...")
         app = msal.ConfidentialClientApplication(
             client_id=self.client_id,
             authority=self.authority,
@@ -65,14 +86,13 @@ class OneDriveUploader:
         result = app.acquire_token_for_client(scopes=SCOPES)
 
         if "access_token" in result:
-            print("Successfully acquired app-only access token.")
             return result["access_token"]
         else:
-            print("ERROR: Failed to acquire access token.")
-            print(f"Error: {result.get('error')}")
-            print(f"Description: {result.get('error_description')}")
-            print(
-                "Please check your credentials and ensure admin consent has been granted for Application Permissions in Azure."
+            console.print("❌ [bold red]ERROR: Failed to acquire access token.")
+            console.print(f"[red]Error: {result.get('error')}")
+            console.print(f"[red]Description: {result.get('error_description')}")
+            console.print(
+                "[yellow]Please check your credentials and ensure admin consent has been granted for Application Permissions in Azure."
             )
             sys.exit(1)
 
@@ -90,7 +110,6 @@ class OneDriveUploader:
         if not remote_folder_path:
             return
 
-        print(f"Ensuring remote directory '{remote_folder_path}' exists...")
         api_base_url = self._get_api_base_url(user_id)
         headers = self._get_headers()
         headers["Content-Type"] = "application/json"
@@ -117,20 +136,14 @@ class OneDriveUploader:
                     create_folder_url, headers=headers, json=folder_body
                 )
                 if response.status_code == 201:
-                    print(
-                        f"Created folder '{part}' in '{current_path_for_api or 'root'}'"
-                    )
+                    pass  # Folder created successfully
                 else:
                     response.raise_for_status()
             except requests.exceptions.RequestException as e:
                 if e.response is not None and e.response.status_code == 409:
-                    print(
-                        f"Folder '{part}' already exists in '{current_path_for_api or 'root'}'"
-                    )
+                    pass  # Folder already exists
                 else:
-                    print(f"ERROR: Error creating folder '{part}': {e}")
-                    if e.response is not None:
-                        print(f"Response Body: {e.response.text}")
+                    # Re-raise for actual errors
                     raise
 
             if current_path_for_api:
@@ -147,8 +160,6 @@ class OneDriveUploader:
         show_progress=True,
     ):
         """Uploads all files in a local directory to a OneDrive folder."""
-        print(f"\nUploading directory '{local_dir_path}'...")
-
         local_dir_name = os.path.basename(os.path.abspath(local_dir_path))
 
         if destination_folder:
@@ -182,24 +193,39 @@ class OneDriveUploader:
 
     def upload_small_file(self, user_id, file_path, destination_path):
         """Uploads a file smaller than 4MB using a single PUT request."""
-        print(f"Performing small file upload for '{os.path.basename(file_path)}'...")
-        api_base_url = self._get_api_base_url(user_id)
-        sanitized_path = requests.utils.quote(destination_path)
-        upload_url = f"{api_base_url}/root:/{sanitized_path}:/content"
+        filename = os.path.basename(file_path)
+        file_size = os.path.getsize(file_path)
 
-        try:
-            with open(file_path, "rb") as f:
-                file_content = f.read()
-            headers = self._get_headers()
-            headers["Content-Type"] = "application/octet-stream"
-            response = requests.put(upload_url, headers=headers, data=file_content)
-            response.raise_for_status()
-            print("Small file uploaded successfully!")
-            print(json.dumps(response.json(), indent=2))
-        except requests.exceptions.RequestException as e:
-            print(f"Error during small file upload: {e}")
-            if e.response is not None:
-                print(f"Response Body: {e.response.text}")
+        # Show progress bar for small files
+        progress = Progress(
+            TextColumn(f"[cyan]{filename}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            console=console,
+        )
+
+        with progress:
+            task = progress.add_task("", total=file_size)
+
+            api_base_url = self._get_api_base_url(user_id)
+            sanitized_path = requests.utils.quote(destination_path)
+            upload_url = f"{api_base_url}/root:/{sanitized_path}:/content"
+
+            try:
+                with open(file_path, "rb") as f:
+                    file_content = f.read()
+                headers = self._get_headers()
+                headers["Content-Type"] = "application/octet-stream"
+                response = requests.put(upload_url, headers=headers, data=file_content)
+                response.raise_for_status()
+                progress.update(task, advance=file_size)
+
+                self.stats["successful_uploads"] += 1
+                self.stats["uploaded_size"] += file_size
+
+            except requests.exceptions.RequestException:
+                self.stats["failed_uploads"] += 1
+                # Silent error handling - just update stats
 
     def upload_large_file(
         self,
@@ -210,7 +236,9 @@ class OneDriveUploader:
         show_progress=True,
     ):
         """Uploads a file of any size using a resumable upload session."""
-        print(f"Performing large file upload for '{os.path.basename(file_path)}'...")
+        filename = os.path.basename(file_path)
+        file_size = os.path.getsize(file_path)
+
         api_base_url = self._get_api_base_url(user_id)
         sanitized_path = requests.utils.quote(destination_path)
         session_url = f"{api_base_url}/root:/{sanitized_path}:/createUploadSession"
@@ -223,18 +251,38 @@ class OneDriveUploader:
             session_response.raise_for_status()
             upload_session = session_response.json()
             upload_url = upload_session["uploadUrl"]
-            print("Upload session created.")
 
-            file_size = os.path.getsize(file_path)
-            with open(file_path, "rb") as f:
-                with tqdm(
-                    total=file_size,
-                    unit="B",
-                    unit_scale=True,
-                    unit_divisor=1024,
-                    desc=f"Uploading {os.path.basename(file_path)}",
-                    disable=not show_progress,
-                ) as pbar:
+            if show_progress:
+                progress = Progress(
+                    TextColumn(f"[cyan]{filename}"),
+                    BarColumn(),
+                    TaskProgressColumn(),
+                    console=console,
+                )
+
+                with progress:
+                    task = progress.add_task("", total=file_size)
+
+                    with open(file_path, "rb") as f:
+                        start_byte = 0
+                        upload_response = None
+                        while start_byte < file_size:
+                            chunk = f.read(chunk_size)
+                            chunk_len = len(chunk)
+                            end_byte = start_byte + chunk_len - 1
+                            chunk_headers = {
+                                "Content-Length": str(chunk_len),
+                                "Content-Range": f"bytes {start_byte}-{end_byte}/{file_size}",
+                            }
+
+                            upload_response = requests.put(
+                                upload_url, headers=chunk_headers, data=chunk
+                            )
+                            upload_response.raise_for_status()
+                            progress.update(task, advance=chunk_len)
+                            start_byte += chunk_len
+            else:
+                with open(file_path, "rb") as f:
                     start_byte = 0
                     upload_response = None
                     while start_byte < file_size:
@@ -250,17 +298,15 @@ class OneDriveUploader:
                             upload_url, headers=chunk_headers, data=chunk
                         )
                         upload_response.raise_for_status()
-                        pbar.update(chunk_len)
                         start_byte += chunk_len
 
             if upload_response and upload_response.status_code in [200, 201]:
-                print("\nLarge file uploaded successfully!")
-                print(json.dumps(upload_response.json(), indent=2))
+                self.stats["successful_uploads"] += 1
+                self.stats["uploaded_size"] += file_size
 
-        except requests.exceptions.RequestException as e:
-            print(f"Error during large file upload: {e}")
-            if e.response is not None:
-                print(f"Response Body: {e.response.text}")
+        except requests.exceptions.RequestException:
+            self.stats["failed_uploads"] += 1
+            # Silent error handling - just update stats
 
     def upload_any_file(
         self,
@@ -272,21 +318,19 @@ class OneDriveUploader:
     ):
         """Determines the correct upload method and executes it."""
         if not os.path.exists(file_path):
-            print(f"Error: Source file not found at '{file_path}'")
+            self.stats["failed_uploads"] += 1
             return
 
         file_size = os.path.getsize(file_path)
         file_name = os.path.basename(file_path)
+        self.stats["total_files"] += 1
+        self.stats["total_size"] += file_size
 
         if destination_folder:
             clean_folder = destination_folder.strip("/")
             destination_path = f"{clean_folder}/{file_name}"
         else:
             destination_path = file_name
-
-        print(f"\nSource: '{file_path}' ({file_size / 1024 / 1024:.2f} MB)")
-        print(f"Target User ID: {user_id}")
-        print(f"Destination: OneDrive Root:/{destination_path}")
 
         if os.path.isdir(file_path):
             self.upload_directory(
@@ -301,11 +345,94 @@ class OneDriveUploader:
                 user_id, file_path, destination_path, chunk_size, show_progress
             )
 
+    def display_summary(self):
+        """Display a comprehensive upload summary."""
+        end_time = datetime.now()
+        duration = end_time - self.stats["start_time"]
+
+        # Create summary table
+        summary_table = Table(show_header=False, box=box.SIMPLE)
+        summary_table.add_column("Metric", style="cyan", width=20)
+        summary_table.add_column("Value", style="white")
+
+        # Calculate success rate
+        total_attempted = (
+            self.stats["successful_uploads"] + self.stats["failed_uploads"]
+        )
+        success_rate = (
+            (self.stats["successful_uploads"] / total_attempted * 100)
+            if total_attempted > 0
+            else 0
+        )
+
+        # Calculate upload speed
+        upload_speed_mb = (
+            (self.stats["uploaded_size"] / 1024 / 1024) / duration.total_seconds()
+            if duration.total_seconds() > 0
+            else 0
+        )
+
+        summary_table.add_row(
+            "📁 Total Files", f"[bold]{self.stats['total_files']}[/bold]"
+        )
+        summary_table.add_row(
+            "✅ Successful",
+            f"[bold green]{self.stats['successful_uploads']}[/bold green]",
+        )
+        summary_table.add_row(
+            "❌ Failed", f"[bold red]{self.stats['failed_uploads']}[/bold red]"
+        )
+        summary_table.add_row("📊 Success Rate", f"[bold]{success_rate:.1f}%[/bold]")
+        summary_table.add_row(
+            "💾 Total Size",
+            f"[bold]{self.stats['total_size'] / 1024 / 1024:.2f} MB[/bold]",
+        )
+        summary_table.add_row(
+            "📤 Uploaded",
+            f"[bold green]{self.stats['uploaded_size'] / 1024 / 1024:.2f} MB[/bold green]",
+        )
+        summary_table.add_row(
+            "⏱️ Duration", f"[bold]{str(duration).split('.')[0]}[/bold]"
+        )
+        summary_table.add_row("🚀 Speed", f"[bold]{upload_speed_mb:.2f} MB/s[/bold]")
+
+        # Determine panel color based on success rate
+        if success_rate == 100:
+            panel_style = "green"
+            title_icon = "🎉"
+        elif success_rate >= 80:
+            panel_style = "yellow"
+            title_icon = "⚠️"
+        else:
+            panel_style = "red"
+            title_icon = "❌"
+
+        console.print("\n")
+        console.print(
+            Panel(
+                summary_table,
+                title=f"[bold]{title_icon} Upload Summary[/bold]",
+                border_style=panel_style,
+                padding=(1, 2),
+            )
+        )
+
 
 def main():
     """
     Main function to handle command-line arguments and initiate the upload.
     """
+    # Display header
+    console.print("\n")
+    console.print(
+        Panel(
+            "[bold blue]OneDrive Uploader[/bold blue]\n"
+            "[dim]Professional file upload tool for Microsoft OneDrive[/dim]",
+            border_style="blue",
+            padding=(1, 2),
+        )
+    )
+
     # --- Argument Parsing ---
     parser = argparse.ArgumentParser(
         description="Upload one or more files to a user's OneDrive using app-only authentication.",
@@ -343,32 +470,125 @@ def main():
 
     args = parser.parse_args()
 
-    # --- Environment Variable Check ---
+    # --- Pre-flight Checks ---
+    console.print("\n")
+    console.print("[bold cyan]🔍 Running Pre-flight Checks...[/bold cyan]")
+
+    checks_table = Table(show_header=False, box=box.SIMPLE)
+    checks_table.add_column("Check", style="white", width=40)
+    checks_table.add_column("Status", style="white", width=15)
+
+    # Environment Variable Check
     client_id = os.getenv("ONEDRIVE_CLIENT_ID")
     tenant_id = os.getenv("ONEDRIVE_TENANT_ID")
     client_secret = os.getenv("ONEDRIVE_CLIENT_SECRET")
     user_id = os.getenv("ONEDRIVE_USER_ID")
 
-    if not all([client_id, tenant_id, client_secret, user_id]):
-        print(
-            "ERROR: Missing one or more required environment variables: "
-            "ONEDRIVE_CLIENT_ID, ONEDRIVE_TENANT_ID, ONEDRIVE_CLIENT_SECRET, ONEDRIVE_USER_ID"
+    env_vars_ok = all([client_id, tenant_id, client_secret, user_id])
+    checks_table.add_row(
+        "Environment Variables",
+        "✅ [green]PASS[/green]" if env_vars_ok else "❌ [red]FAIL[/red]",
+    )
+
+    # File existence checks
+    files_exist = True
+    total_size = 0
+    for file_path in args.local_file_paths:
+        if not os.path.exists(file_path):
+            files_exist = False
+            break
+        if os.path.isfile(file_path):
+            total_size += os.path.getsize(file_path)
+        elif os.path.isdir(file_path):
+            for root, _, files in os.walk(file_path):
+                for file in files:
+                    total_size += os.path.getsize(os.path.join(root, file))
+
+    checks_table.add_row(
+        "File/Directory Paths",
+        "✅ [green]PASS[/green]" if files_exist else "❌ [red]FAIL[/red]",
+    )
+
+    # Network connectivity (basic check)
+    try:
+        import socket
+
+        socket.create_connection(("graph.microsoft.com", 443), timeout=5)
+        network_ok = True
+    except Exception:
+        network_ok = False
+
+    checks_table.add_row(
+        "Network Connectivity",
+        "✅ [green]PASS[/green]" if network_ok else "❌ [red]FAIL[/red]",
+    )
+
+    # Display checks
+    console.print(
+        Panel(checks_table, title="[bold]🔧 System Checks[/bold]", border_style="cyan")
+    )
+
+    # Exit if checks failed
+    if not env_vars_ok:
+        console.print(
+            "\n❌ [bold red]ERROR: Missing one or more required environment variables:"
+        )
+        console.print(
+            "[red]ONEDRIVE_CLIENT_ID, ONEDRIVE_TENANT_ID, ONEDRIVE_CLIENT_SECRET, ONEDRIVE_USER_ID"
         )
         sys.exit(1)
 
-    # --- File Checks ---
+    if not files_exist:
+        for file_path in args.local_file_paths:
+            if not os.path.exists(file_path):
+                console.print(
+                    f"\n❌ [bold red]ERROR: The file '{file_path}' does not exist."
+                )
+        sys.exit(1)
+
+    # Display upload plan
+    plan_table = Table(show_header=True, box=box.SIMPLE)
+    plan_table.add_column("File/Directory", style="cyan")
+    plan_table.add_column("Type", style="white")
+    plan_table.add_column("Size", style="yellow")
+
     for file_path in args.local_file_paths:
-        if not os.path.exists(file_path):
-            print(f"ERROR: The file '{file_path}' does not exist.")
-            sys.exit(1)
+        if os.path.isfile(file_path):
+            size = os.path.getsize(file_path)
+            plan_table.add_row(
+                os.path.basename(file_path), "📄 File", f"{size / 1024 / 1024:.2f} MB"
+            )
+        elif os.path.isdir(file_path):
+            file_count = sum(len(files) for _, _, files in os.walk(file_path))
+            dir_size = sum(
+                os.path.getsize(os.path.join(root, file))
+                for root, _, files in os.walk(file_path)
+                for file in files
+            )
+            plan_table.add_row(
+                os.path.basename(file_path),
+                f"📁 Directory ({file_count} files)",
+                f"{dir_size / 1024 / 1024:.2f} MB",
+            )
+
+    plan_table.add_row("", "", "")
+    plan_table.add_row("[bold]TOTAL", "", f"[bold]{total_size / 1024 / 1024:.2f} MB")
+
+    console.print("\n")
+    console.print(
+        Panel(
+            plan_table,
+            title="[bold green]📋 Upload Plan[/bold green]",
+            border_style="green",
+        )
+    )
 
     # --- Upload Process ---
+
     try:
         uploader = OneDriveUploader(client_id, client_secret, tenant_id)
-        for i, local_path in enumerate(args.local_file_paths):
-            print(
-                f"\n--- Processing path {i+1} of {len(args.local_file_paths)}: {local_path} ---"
-            )
+
+        for local_path in args.local_file_paths:
             if os.path.isdir(local_path):
                 uploader.upload_directory(
                     user_id=user_id,
@@ -386,15 +606,18 @@ def main():
                     show_progress=not args.no_progress,
                 )
             else:
-                print(
-                    f"WARNING: Path '{local_path}' is not a file or directory, skipping."
+                console.print(
+                    f"⚠️ [yellow]WARNING: Path '{local_path}' is not a file or directory, skipping."
                 )
                 continue
 
-            print(f"--- Successfully processed {local_path} ---")
+        # Display final summary
+        uploader.display_summary()
 
     except Exception as e:
-        print(f"An unexpected error occurred during the upload process: {e}")
+        console.print(
+            f"\n❌ [bold red]An unexpected error occurred during the upload process: {e}"
+        )
         sys.exit(1)
 
 
