@@ -12,7 +12,6 @@ dependencies = [
     "msal>=1.32.3",
     "requests>=2.32.4",
     "rich>=14.0.0",
-    "tqdm>=4.67.1",
 ]
 
 

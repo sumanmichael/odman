@@ -10,6 +10,12 @@ from rich.progress import (
     TextColumn,
     BarColumn,
     TaskProgressColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+    FileSizeColumn,
+    TotalFileSizeColumn,
+    DownloadColumn,
+    TransferSpeedColumn,
 )
 from rich.table import Table
 from rich import box
@@ -201,6 +207,10 @@ class OneDriveUploader:
             TextColumn(f"[cyan]{filename}"),
             BarColumn(),
             TaskProgressColumn(),
+            "•",
+            FileSizeColumn(),
+            "/",
+            TotalFileSizeColumn(),
             console=console,
         )
 
@@ -257,6 +267,14 @@ class OneDriveUploader:
                     TextColumn(f"[cyan]{filename}"),
                     BarColumn(),
                     TaskProgressColumn(),
+                    "•",
+                    DownloadColumn(),
+                    "•",
+                    TransferSpeedColumn(),
+                    "•",
+                    TimeElapsedColumn(),
+                    "•",
+                    TimeRemainingColumn(),
                     console=console,
                 )
 
