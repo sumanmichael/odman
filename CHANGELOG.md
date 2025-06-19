@@ -1,39 +1,25 @@
-# Changelog
+## 0.1.0 (2025-06-19)
 
-All notable changes to this project will be documented in this file.
+### Feat
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+- update release workflow and documentation for improved clarity and automation
+- add automated release workflow and update documentation for versioning and changelog
+- enhance progress tracking by adding file size and transfer speed columns
+- integrate Rich library for enhanced console output and progress tracking
+- enhance upload functionality by adding chunk size and progress options for directory uploads
+- enhance authentication by allowing command-line arguments for credentials
+- implement remote folder creation and enhance upload functionality
+- integrate tqdm for upload progress tracking
+- add MIT LICENSE
+- add README.md
 
-## [Unreleased]
+### Fix
 
-### Added
+- simplify commitizen command usage in release script
+- correct commitizen command check in release script
+- correct API URL formatting for folder creation
 
-- Initial release of OneDrive Uploader CLI
-- File upload functionality to OneDrive via Microsoft Graph API
-- App-only authentication support
-- Rich CLI interface with progress indicators
-- Environment variable configuration
+### Refactor
 
-### Changed
-
-### Deprecated
-
-### Removed
-
-### Fixed
-
-### Security
-
-## [0.1.0] - 2025-06-19
-
-### Added
-
-- Initial project setup
-- Basic OneDrive upload functionality
-- CLI interface using Rich
-- Microsoft Graph API integration
-- App-only authentication with MSAL
-
-[Unreleased]: https://github.com/sumanmichael/onedriveuploader/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/sumanmichael/onedriveuploader/releases/tag/v0.1.0
+- reorganize README.md for improved clarity and structure
+- update README.md for clarity and conciseness
