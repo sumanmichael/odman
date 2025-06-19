@@ -1,3 +1,9 @@
+## v0.2.1 (2025-06-20)
+
+### Fix
+
+- update changelog command to include tag reference
+
 ## v0.2.0 (2025-06-20)
 
 ### Feat
