@@ -65,10 +65,10 @@ class OneDriveUploader:
         result = app.acquire_token_for_client(scopes=SCOPES)
 
         if "access_token" in result:
-            print("✅ Successfully acquired app-only access token.")
+            print("Successfully acquired app-only access token.")
             return result["access_token"]
         else:
-            print("❌ ERROR: Failed to acquire access token.")
+            print("ERROR: Failed to acquire access token.")
             print(f"Error: {result.get('error')}")
             print(f"Description: {result.get('error_description')}")
             print(
@@ -86,6 +86,87 @@ class OneDriveUploader:
         """
         return f"{GRAPH_API_ENDPOINT}/users/{user_id}/drive"
 
+    def _ensure_remote_folder_exists(self, user_id, remote_folder_path):
+        if not remote_folder_path:
+            return
+
+        print(f"Ensuring remote directory '{remote_folder_path}' exists...")
+        api_base_url = self._get_api_base_url(user_id)
+        headers = self._get_headers()
+        headers["Content-Type"] = "application/json"
+
+        path_parts = remote_folder_path.strip("/").split("/")
+        current_path_for_api = ""
+        for part in path_parts:
+            if not part:
+                continue
+
+            parent_path_for_url = (
+                "root" if not current_path_for_api else f"root:/{current_path_for_api}"
+            )
+            create_folder_url = f"{api_base_url}/{parent_path_for_url}/children"
+
+            folder_body = {
+                "name": part,
+                "folder": {},
+                "@microsoft.graph.conflictBehavior": "fail",
+            }
+
+            try:
+                response = requests.post(
+                    create_folder_url, headers=headers, json=folder_body
+                )
+                if response.status_code == 201:
+                    print(
+                        f"Created folder '{part}' in '{current_path_for_api or 'root'}'"
+                    )
+                else:
+                    response.raise_for_status()
+            except requests.exceptions.RequestException as e:
+                if e.response is not None and e.response.status_code == 409:
+                    print(
+                        f"Folder '{part}' already exists in '{current_path_for_api or 'root'}'"
+                    )
+                else:
+                    print(f"ERROR: Error creating folder '{part}': {e}")
+                    if e.response is not None:
+                        print(f"Response Body: {e.response.text}")
+                    raise
+
+            if current_path_for_api:
+                current_path_for_api = f"{current_path_for_api}/{part}"
+            else:
+                current_path_for_api = part
+
+    def upload_directory(self, user_id, local_dir_path, destination_folder=None):
+        """Uploads all files in a local directory to a OneDrive folder."""
+        print(f"\nUploading directory '{local_dir_path}'...")
+
+        local_dir_name = os.path.basename(os.path.abspath(local_dir_path))
+
+        if destination_folder:
+            remote_root_folder = f"{destination_folder.strip('/')}/{local_dir_name}"
+        else:
+            remote_root_folder = local_dir_name
+
+        for root, _, files in os.walk(local_dir_path):
+            if not files:
+                continue
+
+            relative_path = os.path.relpath(root, local_dir_path)
+            if relative_path == ".":
+                current_remote_folder = remote_root_folder
+            else:
+                current_remote_folder = os.path.join(
+                    remote_root_folder, relative_path
+                ).replace("\\", "/")
+
+            self._ensure_remote_folder_exists(user_id, current_remote_folder)
+
+            for filename in files:
+                local_file_path = os.path.join(root, filename)
+                self.upload_any_file(user_id, local_file_path, current_remote_folder)
+
     def upload_small_file(self, user_id, file_path, destination_path):
         """Uploads a file smaller than 4MB using a single PUT request."""
         print(f"Performing small file upload for '{os.path.basename(file_path)}'...")
@@ -100,7 +181,7 @@ class OneDriveUploader:
             headers["Content-Type"] = "application/octet-stream"
             response = requests.put(upload_url, headers=headers, data=file_content)
             response.raise_for_status()
-            print("✅ Small file uploaded successfully!")
+            print("Small file uploaded successfully!")
             print(json.dumps(response.json(), indent=2))
         except requests.exceptions.RequestException as e:
             print(f"Error during small file upload: {e}")
@@ -113,7 +194,7 @@ class OneDriveUploader:
         api_base_url = self._get_api_base_url(user_id)
         sanitized_path = requests.utils.quote(destination_path)
         session_url = f"{api_base_url}/root:/{sanitized_path}:/createUploadSession"
-        session_body = {"item": {"@microsoft.graph.conflictBehavior": "rename"}}
+        session_body = {"item": {"@microsoft.graph.conflictBehavior": "replace"}}
 
         try:
             session_response = requests.post(
@@ -122,7 +203,7 @@ class OneDriveUploader:
             session_response.raise_for_status()
             upload_session = session_response.json()
             upload_url = upload_session["uploadUrl"]
-            print("✅ Upload session created.")
+            print("Upload session created.")
 
             file_size = os.path.getsize(file_path)
             with open(file_path, "rb") as f:
@@ -152,7 +233,7 @@ class OneDriveUploader:
                         start_byte += chunk_len
 
             if upload_response and upload_response.status_code in [200, 201]:
-                print("\n✅ Large file uploaded successfully!")
+                print("\nLarge file uploaded successfully!")
                 print(json.dumps(upload_response.json(), indent=2))
 
         except requests.exceptions.RequestException as e:
@@ -189,7 +270,7 @@ def main():
     """Main function to parse arguments and run the uploader."""
     # --- CLI Parser ---
     parser = argparse.ArgumentParser(
-        description="Upload files to a specific user's OneDrive using app-only authentication.",
+        description="Upload files or directories to a specific user's OneDrive using app-only authentication.",
         formatter_class=argparse.RawTextHelpFormatter,
         epilog="""
 Environment Variables:
@@ -202,10 +283,10 @@ Environment Variables:
 """,
     )
     parser.add_argument(
-        "file_path",
+        "path",
         nargs="?",
         default=None,
-        help="The full local path of the file to upload.",
+        help="The full local path of the file or directory to upload.",
     )
     parser.add_argument(
         "-d",
@@ -217,7 +298,7 @@ Environment Variables:
 
     args = parser.parse_args()
 
-    if not args.file_path:
+    if not args.path:
         parser.print_help()
         sys.exit(0)
 
@@ -237,9 +318,15 @@ Environment Variables:
     # --- Execute Upload ---
     try:
         uploader = OneDriveUploader(client_id, client_secret, tenant_id)
-        uploader.upload_any_file(user_id, args.file_path, args.destination_folder)
+        if os.path.isdir(args.path):
+            uploader.upload_directory(user_id, args.path, args.destination_folder)
+        elif os.path.isfile(args.path):
+            uploader.upload_any_file(user_id, args.path, args.destination_folder)
+        else:
+            print(f"ERROR: Path not found or is not a file/directory: {args.path}")
+            sys.exit(1)
     except Exception as e:
-        print(f"\n❌ A critical error occurred: {e}")
+        print(f"\nA critical error occurred: {e}")
         sys.exit(1)
 
 
