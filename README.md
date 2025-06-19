@@ -22,6 +22,21 @@ cd onedriveuploader
 pip install .
 ```
 
+## Release and Changelog
+
+This project follows [Semantic Versioning](https://semver.org/) and maintains a [CHANGELOG.md](CHANGELOG.md) with all notable changes.
+
+### Automated Releases
+
+Releases are automated using [Conventional Commits](https://www.conventionalcommits.org/):
+- **fix:** commits trigger patch releases (0.1.0 → 0.1.1)
+- **feat:** commits trigger minor releases (0.1.0 → 0.2.0)  
+- **feat!:** or **BREAKING CHANGE:** trigger major releases (0.1.0 → 1.0.0)
+
+### Contributing
+
+Please see [CONTRIBUTING.md](CONTRIBUTING.md) for commit message conventions and development guidelines.
+
 ## Usage Guide
 
 ### 1. Prerequisites: Microsoft Entra ID App Registration
