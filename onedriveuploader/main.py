@@ -138,7 +138,14 @@ class OneDriveUploader:
             else:
                 current_path_for_api = part
 
-    def upload_directory(self, user_id, local_dir_path, destination_folder=None):
+    def upload_directory(
+        self,
+        user_id,
+        local_dir_path,
+        destination_folder=None,
+        chunk_size=CHUNK_SIZE,
+        show_progress=True,
+    ):
         """Uploads all files in a local directory to a OneDrive folder."""
         print(f"\nUploading directory '{local_dir_path}'...")
 
@@ -165,7 +172,13 @@ class OneDriveUploader:
 
             for filename in files:
                 local_file_path = os.path.join(root, filename)
-                self.upload_any_file(user_id, local_file_path, current_remote_folder)
+                self.upload_any_file(
+                    user_id,
+                    local_file_path,
+                    current_remote_folder,
+                    chunk_size,
+                    show_progress,
+                )
 
     def upload_small_file(self, user_id, file_path, destination_path):
         """Uploads a file smaller than 4MB using a single PUT request."""
@@ -188,7 +201,14 @@ class OneDriveUploader:
             if e.response is not None:
                 print(f"Response Body: {e.response.text}")
 
-    def upload_large_file(self, user_id, file_path, destination_path):
+    def upload_large_file(
+        self,
+        user_id,
+        file_path,
+        destination_path,
+        chunk_size=CHUNK_SIZE,
+        show_progress=True,
+    ):
         """Uploads a file of any size using a resumable upload session."""
         print(f"Performing large file upload for '{os.path.basename(file_path)}'...")
         api_base_url = self._get_api_base_url(user_id)
@@ -213,11 +233,12 @@ class OneDriveUploader:
                     unit_scale=True,
                     unit_divisor=1024,
                     desc=f"Uploading {os.path.basename(file_path)}",
+                    disable=not show_progress,
                 ) as pbar:
                     start_byte = 0
                     upload_response = None
                     while start_byte < file_size:
-                        chunk = f.read(CHUNK_SIZE)
+                        chunk = f.read(chunk_size)
                         chunk_len = len(chunk)
                         end_byte = start_byte + chunk_len - 1
                         chunk_headers = {
@@ -241,7 +262,14 @@ class OneDriveUploader:
             if e.response is not None:
                 print(f"Response Body: {e.response.text}")
 
-    def upload_any_file(self, user_id, file_path, destination_folder=None):
+    def upload_any_file(
+        self,
+        user_id,
+        file_path,
+        destination_folder=None,
+        chunk_size=CHUNK_SIZE,
+        show_progress=True,
+    ):
         """Determines the correct upload method and executes it."""
         if not os.path.exists(file_path):
             print(f"Error: Source file not found at '{file_path}'")
@@ -260,100 +288,113 @@ class OneDriveUploader:
         print(f"Target User ID: {user_id}")
         print(f"Destination: OneDrive Root:/{destination_path}")
 
+        if os.path.isdir(file_path):
+            self.upload_directory(
+                user_id, file_path, destination_folder, chunk_size, show_progress
+            )
+            return
+
         if file_size < SMALL_FILE_THRESHOLD:
             self.upload_small_file(user_id, file_path, destination_path)
         else:
-            self.upload_large_file(user_id, file_path, destination_path)
+            self.upload_large_file(
+                user_id, file_path, destination_path, chunk_size, show_progress
+            )
 
 
 def main():
-    """Main function to parse arguments and run the uploader."""
-    # --- CLI Parser ---
+    """
+    Main function to handle command-line arguments and initiate the upload.
+    """
+    # --- Argument Parsing ---
     parser = argparse.ArgumentParser(
-        description="Upload files or directories to a specific user's OneDrive using app-only authentication.",
-        formatter_class=argparse.RawTextHelpFormatter,
+        description="Upload one or more files to a user's OneDrive using app-only authentication.",
         epilog="""
-Environment Variables & Arguments:
-  This script requires authentication credentials. They can be provided either as
-  command-line arguments or as environment variables. If an argument is not provided,
-  the script will fall back to the corresponding environment variable.
+        This script uses confidential client authentication. Ensure that the required
+        environment variables (ONEDRIVE_CLIENT_ID, ONEDRIVE_TENANT_ID,
+        ONEDRIVE_CLIENT_SECRET, ONEDRIVE_USER_ID) are set before running.
+        The application must be granted the 'Files.ReadWrite.All' Application Permission
+        in Azure AD and have received admin consent.
+        """,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
 
-  1. --client-id     (ONEDRIVE_CLIENT_ID)   : Your Application (client) ID.
-  2. --tenant-id     (ONEDRIVE_TENANT_ID)   : Your Directory (tenant) ID.
-  3. --client-secret (ONEDRIVE_CLIENT_SECRET): Your Client Secret value.
-  4. --user-id       (ONEDRIVE_USER_ID)     : The User ID or User Principal Name (email) of the target OneDrive account.
-""",
+    parser.add_argument(
+        "local_file_paths",
+        nargs="+",
+        help="The local paths to the files to upload.",
     )
     parser.add_argument(
-        "path",
-        nargs="?",
-        default=None,
-        help="The full local path of the file or directory to upload.",
+        "-r",
+        "--remote-folder",
+        default="",
+        help="The destination folder in OneDrive. If not specified, uploads to the root.",
     )
     parser.add_argument(
-        "-d",
-        "--destination",
-        dest="destination_folder",
-        help="The destination folder in the user's OneDrive root (e.g., 'Shared/Reports').",
-        default=None,
+        "-c",
+        "--chunk-size",
+        type=int,
+        default=CHUNK_SIZE,
+        help=f"The chunk size for large file uploads in bytes. Default is {CHUNK_SIZE} bytes.",
     )
     parser.add_argument(
-        "--client-id",
-        dest="client_id",
-        default=os.getenv("ONEDRIVE_CLIENT_ID"),
-        help="Application (client) ID. Defaults to ONEDRIVE_CLIENT_ID environment variable.",
-    )
-    parser.add_argument(
-        "--tenant-id",
-        dest="tenant_id",
-        default=os.getenv("ONEDRIVE_TENANT_ID"),
-        help="Directory (tenant) ID. Defaults to ONEDRIVE_TENANT_ID environment variable.",
-    )
-    parser.add_argument(
-        "--client-secret",
-        dest="client_secret",
-        default=os.getenv("ONEDRIVE_CLIENT_SECRET"),
-        help="Client Secret value. Defaults to ONEDRIVE_CLIENT_SECRET environment variable.",
-    )
-    parser.add_argument(
-        "--user-id",
-        dest="user_id",
-        default=os.getenv("ONEDRIVE_USER_ID"),
-        help="User ID or User Principal Name. Defaults to ONEDRIVE_USER_ID environment variable.",
+        "--no-progress", action="store_true", help="Disable the progress bar."
     )
 
     args = parser.parse_args()
 
-    if not args.path:
-        parser.print_help()
-        sys.exit(0)
-
-    # --- Load Configuration from args (with env var defaults) ---
-    client_id = args.client_id
-    tenant_id = args.tenant_id
-    client_secret = args.client_secret
-    user_id = args.user_id
+    # --- Environment Variable Check ---
+    client_id = os.getenv("ONEDRIVE_CLIENT_ID")
+    tenant_id = os.getenv("ONEDRIVE_TENANT_ID")
+    client_secret = os.getenv("ONEDRIVE_CLIENT_SECRET")
+    user_id = os.getenv("ONEDRIVE_USER_ID")
 
     if not all([client_id, tenant_id, client_secret, user_id]):
-        print("ERROR: One or more required credentials are not set.")
         print(
-            "Please provide them as arguments (--client-id, etc.) or set the corresponding environment variables."
+            "ERROR: Missing one or more required environment variables: "
+            "ONEDRIVE_CLIENT_ID, ONEDRIVE_TENANT_ID, ONEDRIVE_CLIENT_SECRET, ONEDRIVE_USER_ID"
         )
-        print("Run with --help for more details.")
         sys.exit(1)
 
-    # --- Execute Upload ---
+    # --- File Checks ---
+    for file_path in args.local_file_paths:
+        if not os.path.exists(file_path):
+            print(f"ERROR: The file '{file_path}' does not exist.")
+            sys.exit(1)
+
+    # --- Upload Process ---
     try:
         uploader = OneDriveUploader(client_id, client_secret, tenant_id)
-        if os.path.isdir(args.path):
-            uploader.upload_directory(user_id, args.path, args.destination_folder)
-        elif os.path.isfile(args.path):
-            uploader.upload_any_file(user_id, args.path, args.destination_folder)
-        else:
-            print(f"ERROR: Path not found or is not a file/directory: {args.path}")
-            sys.exit(1)
+        for i, local_path in enumerate(args.local_file_paths):
+            print(
+                f"\n--- Processing path {i+1} of {len(args.local_file_paths)}: {local_path} ---"
+            )
+            if os.path.isdir(local_path):
+                uploader.upload_directory(
+                    user_id=user_id,
+                    local_dir_path=local_path,
+                    destination_folder=args.remote_folder,
+                    chunk_size=args.chunk_size,
+                    show_progress=not args.no_progress,
+                )
+            elif os.path.isfile(local_path):
+                uploader.upload_any_file(
+                    user_id=user_id,
+                    file_path=local_path,
+                    destination_folder=args.remote_folder,
+                    chunk_size=args.chunk_size,
+                    show_progress=not args.no_progress,
+                )
+            else:
+                print(
+                    f"WARNING: Path '{local_path}' is not a file or directory, skipping."
+                )
+                continue
+
+            print(f"--- Successfully processed {local_path} ---")
+
     except Exception as e:
-        print(f"\nA critical error occurred: {e}")
+        print(f"An unexpected error occurred during the upload process: {e}")
         sys.exit(1)
 
 
