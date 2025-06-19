@@ -1,3 +1,11 @@
+## v0.2.1 (2025-06-20)
+
+### Fix
+
+- correct changelog command syntax in release workflow
+- correct changelog command syntax in release workflow
+- update changelog command to include tag reference
+
 ## v0.2.0 (2025-06-20)
 
 ### Feat
