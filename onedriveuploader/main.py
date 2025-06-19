@@ -3,6 +3,9 @@ import sys
 import argparse
 import msal
 import requests
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import (
@@ -10,12 +13,11 @@ from rich.progress import (
     TextColumn,
     BarColumn,
     TaskProgressColumn,
-    TimeElapsedColumn,
+    TransferSpeedColumn,
     TimeRemainingColumn,
+    TimeElapsedColumn,
     FileSizeColumn,
     TotalFileSizeColumn,
-    DownloadColumn,
-    TransferSpeedColumn,
 )
 from rich.table import Table
 from rich import box
@@ -54,19 +56,56 @@ SMALL_FILE_THRESHOLD = 4 * 1024 * 1024  # 4 MiB
 console = Console()
 
 
+def truncate_path(path, max_length=40):
+    """Truncate a file path with ellipses if it's too long."""
+    if len(path) <= max_length:
+        return path
+
+    # Try to keep the filename and some parent directory info
+    filename = os.path.basename(path)
+    if len(filename) >= max_length - 3:
+        return f"...{filename[-(max_length-3):]}"
+
+    # Calculate how much space we have for the directory part
+    remaining_space = max_length - len(filename) - 3  # 3 for "..."
+    if remaining_space > 0:
+        dir_part = os.path.dirname(path)
+        if len(dir_part) > remaining_space:
+            dir_part = dir_part[:remaining_space]
+        return f"...{dir_part}/{filename}"
+    else:
+        return f"...{filename}"
+
+
 class OneDriveUploader:
     """
     Handles file uploads to a specific user's OneDrive using a confidential
     client application flow (app-only authentication).
     """
 
-    def __init__(self, client_id, client_secret, tenant_id):
+    def __init__(self, client_id, client_secret, tenant_id, max_workers=3):
         self.client_id = client_id
         self.client_secret = client_secret
         self.authority = f"https://login.microsoftonline.com/{tenant_id}"
+
+        # Validate and set max_workers
+        if max_workers < 1:
+            console.print(
+                "[yellow]⚠️ Warning: max_workers must be at least 1. Setting to 1.[/yellow]"
+            )
+            self.max_workers = 1
+        elif max_workers > 10:
+            console.print(
+                "[yellow]⚠️ Warning: max_workers > 10 may cause API rate limiting. Setting to 10.[/yellow]"
+            )
+            self.max_workers = 10
+        else:
+            self.max_workers = max_workers
+
         self.access_token = self._get_access_token()
 
-        # Upload statistics
+        # Upload statistics (thread-safe)
+        self._stats_lock = threading.Lock()
         self.stats = {
             "total_files": 0,
             "successful_uploads": 0,
@@ -101,6 +140,32 @@ class OneDriveUploader:
                 "[yellow]Please check your credentials and ensure admin consent has been granted for Application Permissions in Azure."
             )
             sys.exit(1)
+
+    def _update_stats(self, **kwargs):
+        """Thread-safe method to update upload statistics."""
+        with self._stats_lock:
+            for key, value in kwargs.items():
+                if key in self.stats:
+                    self.stats[key] += value
+
+    def _retry_request(self, func, max_retries=3, delay=1):
+        """Retry a function with exponential backoff."""
+        for attempt in range(max_retries):
+            try:
+                return func()
+            except requests.exceptions.RequestException as e:
+                if attempt == max_retries - 1:
+                    raise
+                if hasattr(e, "response") and e.response is not None:
+                    if e.response.status_code == 429:  # Rate limited
+                        retry_after = int(e.response.headers.get("Retry-After", delay))
+                        time.sleep(retry_after)
+                    elif e.response.status_code >= 500:  # Server error
+                        time.sleep(delay * (2**attempt))
+                    else:
+                        raise  # Don't retry for client errors
+                else:
+                    time.sleep(delay * (2**attempt))
 
     def _get_headers(self):
         """Constructs the default headers for API requests."""
@@ -165,7 +230,7 @@ class OneDriveUploader:
         chunk_size=CHUNK_SIZE,
         show_progress=True,
     ):
-        """Uploads all files in a local directory to a OneDrive folder."""
+        """Uploads all files in a local directory to a OneDrive folder using parallel processing."""
         local_dir_name = os.path.basename(os.path.abspath(local_dir_path))
 
         if destination_folder:
@@ -173,6 +238,8 @@ class OneDriveUploader:
         else:
             remote_root_folder = local_dir_name
 
+        # Collect all files to upload
+        upload_tasks = []
         for root, _, files in os.walk(local_dir_path):
             if not files:
                 continue
@@ -185,25 +252,137 @@ class OneDriveUploader:
                     remote_root_folder, relative_path
                 ).replace("\\", "/")
 
+            # Ensure the folder exists first
             self._ensure_remote_folder_exists(user_id, current_remote_folder)
 
             for filename in files:
                 local_file_path = os.path.join(root, filename)
-                self.upload_any_file(
-                    user_id,
-                    local_file_path,
-                    current_remote_folder,
-                    chunk_size,
-                    show_progress,
+                upload_tasks.append(
+                    (
+                        user_id,
+                        local_file_path,
+                        current_remote_folder,
+                        chunk_size,
+                        None,  # progress_callback - will be set during upload
+                    )
                 )
 
-    def upload_small_file(self, user_id, file_path, destination_path):
-        """Uploads a file smaller than 4MB using a single PUT request."""
-        filename = os.path.basename(file_path)
-        file_size = os.path.getsize(file_path)
+        # Upload files in parallel
+        if upload_tasks:
+            console.print(
+                f"[cyan]📁 Uploading {len(upload_tasks)} files from directory with {self.max_workers} workers...[/cyan]"
+            )
 
-        # Show progress bar for small files
-        progress = Progress(
+            # Create progress tracker if needed
+            if show_progress:
+                progress = Progress(
+                    TextColumn("[progress.description]{task.description}"),
+                    BarColumn(),
+                    TaskProgressColumn(),
+                    "•",
+                    FileSizeColumn(),
+                    "/",
+                    TotalFileSizeColumn(),
+                    "•",
+                    TransferSpeedColumn(),
+                    "•",
+                    TimeElapsedColumn(),
+                    "•",
+                    TimeRemainingColumn(),
+                    console=console,
+                )
+
+                # Calculate total size for overall progress
+                total_size = sum(
+                    os.path.getsize(task[1])
+                    for task in upload_tasks
+                    if os.path.isfile(task[1])
+                )
+
+                with progress:
+                    overall_task = progress.add_task(
+                        "Directory Progress", total=total_size
+                    )
+                    file_tasks = {}
+
+                    for task in upload_tasks:
+                        file_path = task[1]
+                        if os.path.isfile(file_path):
+                            filename = os.path.basename(file_path)
+                            file_size = os.path.getsize(file_path)
+                            task_id = progress.add_task(
+                                f"📄 {filename}", total=file_size
+                            )
+                            file_tasks[file_path] = task_id
+
+                    def upload_with_progress(task):
+                        """Upload a single file with progress callback."""
+                        user_id, file_path, destination_folder, chunk_size, _ = task
+
+                        def progress_callback(bytes_uploaded):
+                            if file_path in file_tasks:
+                                progress.update(
+                                    file_tasks[file_path], advance=bytes_uploaded
+                                )
+                            progress.update(overall_task, advance=bytes_uploaded)
+
+                        return self.upload_any_file(
+                            user_id=user_id,
+                            file_path=file_path,
+                            destination_folder=destination_folder,
+                            chunk_size=chunk_size,
+                            progress_callback=progress_callback,
+                        )
+
+                    with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                        futures = []
+                        for task in upload_tasks:
+                            future = executor.submit(upload_with_progress, task)
+                            futures.append((future, task[1]))  # Keep track of file path
+
+                        # Process completed uploads
+                        completed = 0
+                        for future, file_path in zip(
+                            futures, [task[1] for task in upload_tasks]
+                        ):
+                            try:
+                                future.result()  # This will raise any exceptions that occurred
+                                completed += 1
+                            except Exception as e:
+                                console.print(
+                                    f"[red]❌ Failed {os.path.basename(file_path)}: {e}[/red]"
+                                )
+                                self._update_stats(failed_uploads=1)
+            else:
+                # No progress display
+                with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                    futures = []
+                    for task in upload_tasks:
+                        future = executor.submit(self.upload_any_file, *task)
+                        futures.append((future, task[1]))  # Keep track of file path
+
+                    # Process completed uploads
+                    completed = 0
+                    for future, file_path in zip(
+                        futures, [task[1] for task in upload_tasks]
+                    ):
+                        try:
+                            future.result()  # This will raise any exceptions that occurred
+                            completed += 1
+                            console.print(
+                                f"[green]✅ Completed {completed}/{len(upload_tasks)}: {os.path.basename(file_path)}[/green]"
+                            )
+                        except Exception as e:
+                            console.print(
+                                f"[red]❌ Failed {os.path.basename(file_path)}: {e}[/red]"
+                            )
+                            self._update_stats(failed_uploads=1)
+        else:
+            console.print("[yellow]No files found in directory to upload.[/yellow]")
+
+    def _create_file_progress(self, filename, file_size):
+        """Create a progress display for individual file uploads with enhanced columns."""
+        return Progress(
             TextColumn(f"[cyan]{filename}"),
             BarColumn(),
             TaskProgressColumn(),
@@ -211,31 +390,47 @@ class OneDriveUploader:
             FileSizeColumn(),
             "/",
             TotalFileSizeColumn(),
+            "•",
+            TransferSpeedColumn(),
+            "•",
+            TimeElapsedColumn(),
+            "•",
+            TimeRemainingColumn(),
             console=console,
         )
 
-        with progress:
-            task = progress.add_task("", total=file_size)
+    def upload_small_file(
+        self, user_id, file_path, destination_path, progress_callback=None
+    ):
+        """Uploads a file smaller than 4MB using a single PUT request."""
+        filename = os.path.basename(file_path)
+        file_size = os.path.getsize(file_path)
 
-            api_base_url = self._get_api_base_url(user_id)
-            sanitized_path = requests.utils.quote(destination_path)
-            upload_url = f"{api_base_url}/root:/{sanitized_path}:/content"
+        api_base_url = self._get_api_base_url(user_id)
+        sanitized_path = requests.utils.quote(destination_path)
+        upload_url = f"{api_base_url}/root:/{sanitized_path}:/content"
 
-            try:
-                with open(file_path, "rb") as f:
-                    file_content = f.read()
+        try:
+            with open(file_path, "rb") as f:
+                file_content = f.read()
+
+            def upload_request():
                 headers = self._get_headers()
                 headers["Content-Type"] = "application/octet-stream"
                 response = requests.put(upload_url, headers=headers, data=file_content)
                 response.raise_for_status()
-                progress.update(task, advance=file_size)
+                return response
 
-                self.stats["successful_uploads"] += 1
-                self.stats["uploaded_size"] += file_size
+            self._retry_request(upload_request)
 
-            except requests.exceptions.RequestException:
-                self.stats["failed_uploads"] += 1
-                # Silent error handling - just update stats
+            if progress_callback:
+                progress_callback(file_size)
+
+            self._update_stats(successful_uploads=1, uploaded_size=file_size)
+
+        except requests.exceptions.RequestException as e:
+            console.print(f"[red]Failed to upload {filename}: {str(e)}[/red]")
+            self._update_stats(failed_uploads=1)
 
     def upload_large_file(
         self,
@@ -243,7 +438,7 @@ class OneDriveUploader:
         file_path,
         destination_path,
         chunk_size=CHUNK_SIZE,
-        show_progress=True,
+        progress_callback=None,
     ):
         """Uploads a file of any size using a resumable upload session."""
         filename = os.path.basename(file_path)
@@ -255,76 +450,49 @@ class OneDriveUploader:
         session_body = {"item": {"@microsoft.graph.conflictBehavior": "replace"}}
 
         try:
-            session_response = requests.post(
-                session_url, headers=self._get_headers(), json=session_body
-            )
+
+            def create_session():
+                return requests.post(
+                    session_url, headers=self._get_headers(), json=session_body
+                )
+
+            session_response = self._retry_request(create_session)
             session_response.raise_for_status()
             upload_session = session_response.json()
             upload_url = upload_session["uploadUrl"]
 
-            if show_progress:
-                progress = Progress(
-                    TextColumn(f"[cyan]{filename}"),
-                    BarColumn(),
-                    TaskProgressColumn(),
-                    "•",
-                    DownloadColumn(),
-                    "•",
-                    TransferSpeedColumn(),
-                    "•",
-                    TimeElapsedColumn(),
-                    "•",
-                    TimeRemainingColumn(),
-                    console=console,
-                )
+            with open(file_path, "rb") as f:
+                start_byte = 0
+                upload_response = None
+                while start_byte < file_size:
+                    # Read chunk and calculate range
+                    chunk = f.read(chunk_size)
+                    chunk_len = len(chunk)
+                    end_byte = start_byte + chunk_len - 1
 
-                with progress:
-                    task = progress.add_task("", total=file_size)
-
-                    with open(file_path, "rb") as f:
-                        start_byte = 0
-                        upload_response = None
-                        while start_byte < file_size:
-                            chunk = f.read(chunk_size)
-                            chunk_len = len(chunk)
-                            end_byte = start_byte + chunk_len - 1
-                            chunk_headers = {
-                                "Content-Length": str(chunk_len),
-                                "Content-Range": f"bytes {start_byte}-{end_byte}/{file_size}",
-                            }
-
-                            upload_response = requests.put(
-                                upload_url, headers=chunk_headers, data=chunk
-                            )
-                            upload_response.raise_for_status()
-                            progress.update(task, advance=chunk_len)
-                            start_byte += chunk_len
-            else:
-                with open(file_path, "rb") as f:
-                    start_byte = 0
-                    upload_response = None
-                    while start_byte < file_size:
-                        chunk = f.read(chunk_size)
-                        chunk_len = len(chunk)
-                        end_byte = start_byte + chunk_len - 1
+                    def upload_chunk():
                         chunk_headers = {
                             "Content-Length": str(chunk_len),
                             "Content-Range": f"bytes {start_byte}-{end_byte}/{file_size}",
                         }
-
-                        upload_response = requests.put(
+                        return requests.put(
                             upload_url, headers=chunk_headers, data=chunk
                         )
-                        upload_response.raise_for_status()
-                        start_byte += chunk_len
+
+                    upload_response = self._retry_request(upload_chunk)
+                    upload_response.raise_for_status()
+
+                    if progress_callback:
+                        progress_callback(chunk_len)
+
+                    start_byte += chunk_len
 
             if upload_response and upload_response.status_code in [200, 201]:
-                self.stats["successful_uploads"] += 1
-                self.stats["uploaded_size"] += file_size
+                self._update_stats(successful_uploads=1, uploaded_size=file_size)
 
-        except requests.exceptions.RequestException:
-            self.stats["failed_uploads"] += 1
-            # Silent error handling - just update stats
+        except requests.exceptions.RequestException as e:
+            console.print(f"[red]Failed to upload {filename}: {str(e)}[/red]")
+            self._update_stats(failed_uploads=1)
 
     def upload_any_file(
         self,
@@ -332,17 +500,23 @@ class OneDriveUploader:
         file_path,
         destination_folder=None,
         chunk_size=CHUNK_SIZE,
-        show_progress=True,
+        progress_callback=None,
     ):
         """Determines the correct upload method and executes it."""
         if not os.path.exists(file_path):
-            self.stats["failed_uploads"] += 1
+            console.print(f"[red]File not found: {file_path}[/red]")
+            self._update_stats(failed_uploads=1)
+            return
+
+        if os.path.isdir(file_path):
+            console.print(
+                f"[yellow]Skipping directory: {file_path} (use upload_directory instead)[/yellow]"
+            )
             return
 
         file_size = os.path.getsize(file_path)
         file_name = os.path.basename(file_path)
-        self.stats["total_files"] += 1
-        self.stats["total_size"] += file_size
+        self._update_stats(total_files=1, total_size=file_size)
 
         if destination_folder:
             clean_folder = destination_folder.strip("/")
@@ -350,18 +524,338 @@ class OneDriveUploader:
         else:
             destination_path = file_name
 
-        if os.path.isdir(file_path):
-            self.upload_directory(
-                user_id, file_path, destination_folder, chunk_size, show_progress
+        try:
+            if file_size < SMALL_FILE_THRESHOLD:
+                self.upload_small_file(
+                    user_id, file_path, destination_path, progress_callback
+                )
+            else:
+                self.upload_large_file(
+                    user_id, file_path, destination_path, chunk_size, progress_callback
+                )
+        except Exception as e:
+            console.print(
+                f"[red]Unexpected error uploading {file_name}: {str(e)}[/red]"
             )
+            self._update_stats(failed_uploads=1)
+
+    def upload_single_file_with_progress(
+        self,
+        user_id,
+        file_path,
+        destination_folder=None,
+        chunk_size=CHUNK_SIZE,
+    ):
+        """Upload a single file with enhanced progress display."""
+        if not os.path.exists(file_path) or not os.path.isfile(file_path):
+            console.print(f"[red]File not found: {file_path}[/red]")
+            return False
+
+        filename = os.path.basename(file_path)
+        file_size = os.path.getsize(file_path)
+
+        progress = self._create_file_progress(filename, file_size)
+
+        with progress:
+            task = progress.add_task("", total=file_size)
+
+            def progress_callback(bytes_uploaded):
+                progress.update(task, advance=bytes_uploaded)
+
+            try:
+                self.upload_any_file(
+                    user_id,
+                    file_path,
+                    destination_folder,
+                    chunk_size,
+                    progress_callback,
+                )
+                return True
+            except Exception as e:
+                console.print(f"[red]Failed to upload {filename}: {str(e)}[/red]")
+                return False
+
+    def collect_all_files(self, local_paths, destination_folder=None):
+        """Collect all files from directories and individual files into a unified list."""
+        all_files = []
+
+        for local_path in local_paths:
+            if os.path.isfile(local_path):
+                # Individual file
+                if destination_folder:
+                    clean_folder = destination_folder.strip("/")
+                    dest_path = f"{clean_folder}/{os.path.basename(local_path)}"
+                else:
+                    dest_path = os.path.basename(local_path)
+
+                all_files.append(
+                    {
+                        "local_path": local_path,
+                        "destination_path": dest_path,
+                        "display_path": local_path,
+                        "size": os.path.getsize(local_path),
+                    }
+                )
+
+            elif os.path.isdir(local_path):
+                # Directory - collect all files recursively
+                local_dir_name = os.path.basename(os.path.abspath(local_path))
+
+                if destination_folder:
+                    remote_root_folder = (
+                        f"{destination_folder.strip('/')}/{local_dir_name}"
+                    )
+                else:
+                    remote_root_folder = local_dir_name
+
+                for root, _, files in os.walk(local_path):
+                    if not files:
+                        continue
+
+                    relative_path = os.path.relpath(root, local_path)
+                    if relative_path == ".":
+                        current_remote_folder = remote_root_folder
+                    else:
+                        current_remote_folder = os.path.join(
+                            remote_root_folder, relative_path
+                        ).replace("\\", "/")
+
+                    # Ensure the remote folder exists
+                    # Note: We'll need to call this in the upload method
+
+                    for filename in files:
+                        local_file_path = os.path.join(root, filename)
+                        dest_path = f"{current_remote_folder}/{filename}"
+
+                        # Create a relative display path from the original directory
+                        rel_file_path = os.path.relpath(
+                            local_file_path, os.path.dirname(local_path)
+                        )
+
+                        all_files.append(
+                            {
+                                "local_path": local_file_path,
+                                "destination_path": dest_path,
+                                "display_path": rel_file_path,
+                                "size": os.path.getsize(local_file_path),
+                                "remote_folder": current_remote_folder,
+                            }
+                        )
+
+        return all_files
+
+    def upload_unified(
+        self,
+        user_id,
+        local_paths,
+        destination_folder=None,
+        chunk_size=CHUNK_SIZE,
+        show_progress=True,
+    ):
+        """Upload files and directories in a single unified progress display."""
+        # Collect all files from directories and individual files
+        all_files = self.collect_all_files(local_paths, destination_folder)
+
+        if not all_files:
+            console.print("[yellow]No files found to upload.[/yellow]")
             return
 
-        if file_size < SMALL_FILE_THRESHOLD:
-            self.upload_small_file(user_id, file_path, destination_path)
-        else:
-            self.upload_large_file(
-                user_id, file_path, destination_path, chunk_size, show_progress
+        total_size = sum(f["size"] for f in all_files)
+        console.print(
+            f"[cyan]🚀 Starting upload of {len(all_files)} files ({total_size / 1024 / 1024:.1f} MB) with {self.max_workers} workers...[/cyan]"
+        )
+
+        # Create folders first (sequentially to avoid conflicts)
+        folders_created = set()
+        for file_info in all_files:
+            if "remote_folder" in file_info:
+                folder_path = file_info["remote_folder"]
+                if folder_path not in folders_created:
+                    self._ensure_remote_folder_exists(user_id, folder_path)
+                    folders_created.add(folder_path)
+
+        # Create unified progress display
+        if show_progress:
+            progress = Progress(
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TaskProgressColumn(),
+                "•",
+                FileSizeColumn(),
+                "/",
+                TotalFileSizeColumn(),
+                "•",
+                TransferSpeedColumn(),
+                "•",
+                TimeElapsedColumn(),
+                "•",
+                TimeRemainingColumn(),
+                console=console,
             )
+
+            with progress:
+                overall_task = progress.add_task(
+                    "📦 Overall Progress", total=total_size
+                )
+                file_tasks = {}
+
+                # Create individual file tasks with truncated paths
+                for file_info in all_files:
+                    display_name = truncate_path(file_info["display_path"], 35)
+                    task_id = progress.add_task(
+                        f"📄 {display_name}", total=file_info["size"]
+                    )
+                    file_tasks[file_info["local_path"]] = task_id
+
+                def upload_with_progress(file_info):
+                    """Upload a single file with progress callback."""
+                    local_path = file_info["local_path"]
+
+                    def progress_callback(bytes_uploaded):
+                        if local_path in file_tasks:
+                            progress.update(
+                                file_tasks[local_path], advance=bytes_uploaded
+                            )
+                        progress.update(overall_task, advance=bytes_uploaded)
+
+                    return self.upload_any_file(
+                        user_id=user_id,
+                        file_path=local_path,
+                        destination_folder=os.path.dirname(
+                            file_info["destination_path"]
+                        )
+                        if "/" in file_info["destination_path"]
+                        else None,
+                        chunk_size=chunk_size,
+                        progress_callback=progress_callback,
+                    )
+
+                # Upload files in parallel
+                with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                    futures = []
+                    for file_info in all_files:
+                        future = executor.submit(upload_with_progress, file_info)
+                        futures.append((future, file_info))
+
+                    # Process completed uploads
+                    for future, file_info in futures:
+                        try:
+                            future.result()
+                        except Exception as e:
+                            display_name = truncate_path(file_info["display_path"], 35)
+                            console.print(f"[red]❌ Failed {display_name}: {e}[/red]")
+        else:
+            # No progress display - upload without visual feedback
+            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                futures = []
+                for file_info in all_files:
+                    future = executor.submit(
+                        self.upload_any_file,
+                        user_id,
+                        file_info["local_path"],
+                        os.path.dirname(file_info["destination_path"])
+                        if "/" in file_info["destination_path"]
+                        else None,
+                        chunk_size,
+                        None,
+                    )
+                    futures.append((future, file_info))
+
+                # Process completed uploads
+                for future, file_info in futures:
+                    try:
+                        future.result()
+                        console.print(
+                            f"[green]✅ {truncate_path(file_info['display_path'], 50)}[/green]"
+                        )
+                    except Exception as e:
+                        console.print(
+                            f"[red]❌ {truncate_path(file_info['display_path'], 50)}: {e}[/red]"
+                        )
+
+    def upload_files_parallel(
+        self,
+        user_id,
+        file_paths,
+        destination_folder=None,
+        chunk_size=CHUNK_SIZE,
+        show_progress=True,
+    ):
+        """Upload multiple files in parallel with unified progress tracking."""
+        if not file_paths:
+            return
+
+        console.print(
+            f"[cyan]🚀 Starting parallel upload of {len(file_paths)} files with {self.max_workers} workers...[/cyan]"
+        )
+
+        # Create a unified progress tracker for all files
+        if show_progress:
+            progress = Progress(
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TaskProgressColumn(),
+                "•",
+                FileSizeColumn(),
+                "/",
+                TotalFileSizeColumn(),
+                "•",
+                TransferSpeedColumn(),
+                "•",
+                TimeElapsedColumn(),
+                "•",
+                TimeRemainingColumn(),
+                console=console,
+            )
+        else:
+            progress = None
+
+        # Calculate total size for overall progress
+        total_size = sum(os.path.getsize(fp) for fp in file_paths if os.path.isfile(fp))
+
+        with progress if progress else threading.Lock():
+            if progress:
+                overall_task = progress.add_task("Overall Progress", total=total_size)
+                file_tasks = {}
+                for file_path in file_paths:
+                    if os.path.isfile(file_path):
+                        filename = os.path.basename(file_path)
+                        file_size = os.path.getsize(file_path)
+                        task_id = progress.add_task(f"📄 {filename}", total=file_size)
+                        file_tasks[file_path] = task_id
+
+            def upload_with_progress(file_path):
+                """Upload a single file with progress callback."""
+
+                def progress_callback(bytes_uploaded):
+                    if progress:
+                        if file_path in file_tasks:
+                            progress.update(
+                                file_tasks[file_path], advance=bytes_uploaded
+                            )
+                        progress.update(overall_task, advance=bytes_uploaded)
+
+                return self.upload_any_file(
+                    user_id,
+                    file_path,
+                    destination_folder,
+                    chunk_size,
+                    progress_callback,
+                )
+
+            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                futures = []
+                for file_path in file_paths:
+                    if os.path.isfile(file_path):
+                        future = executor.submit(upload_with_progress, file_path)
+                        futures.append(future)
+
+                # Process completed uploads
+                for future in as_completed(futures):
+                    try:
+                        future.result()
+                    except Exception as e:
+                        console.print(f"[red]Upload error: {e}[/red]")
 
     def display_summary(self):
         """Display a comprehensive upload summary."""
@@ -485,8 +979,20 @@ def main():
     parser.add_argument(
         "--no-progress", action="store_true", help="Disable the progress bar."
     )
+    parser.add_argument(
+        "-w",
+        "--max-workers",
+        type=int,
+        default=3,
+        help="Maximum number of concurrent upload workers. Default is 3. Range: 1-10.",
+    )
 
     args = parser.parse_args()
+
+    # Validate max_workers argument
+    if args.max_workers < 1 or args.max_workers > 20:
+        console.print("[red]❌ Error: max-workers must be between 1 and 20.[/red]")
+        sys.exit(1)
 
     # --- Pre-flight Checks ---
     console.print("\n")
@@ -604,30 +1110,32 @@ def main():
     # --- Upload Process ---
 
     try:
-        uploader = OneDriveUploader(client_id, client_secret, tenant_id)
+        uploader = OneDriveUploader(
+            client_id, client_secret, tenant_id, args.max_workers
+        )
 
+        # Filter out invalid paths
+        valid_paths = []
         for local_path in args.local_file_paths:
-            if os.path.isdir(local_path):
-                uploader.upload_directory(
-                    user_id=user_id,
-                    local_dir_path=local_path,
-                    destination_folder=args.remote_folder,
-                    chunk_size=args.chunk_size,
-                    show_progress=not args.no_progress,
-                )
-            elif os.path.isfile(local_path):
-                uploader.upload_any_file(
-                    user_id=user_id,
-                    file_path=local_path,
-                    destination_folder=args.remote_folder,
-                    chunk_size=args.chunk_size,
-                    show_progress=not args.no_progress,
-                )
+            if os.path.isdir(local_path) or os.path.isfile(local_path):
+                valid_paths.append(local_path)
             else:
                 console.print(
                     f"⚠️ [yellow]WARNING: Path '{local_path}' is not a file or directory, skipping."
                 )
-                continue
+
+        if not valid_paths:
+            console.print("[red]❌ No valid files or directories to upload.[/red]")
+            sys.exit(1)
+
+        # Upload all files and directories in a unified progress display
+        uploader.upload_unified(
+            user_id=user_id,
+            local_paths=valid_paths,
+            destination_folder=args.remote_folder,
+            chunk_size=args.chunk_size,
+            show_progress=not args.no_progress,
+        )
 
         # Display final summary
         uploader.display_summary()
