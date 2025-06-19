@@ -12,6 +12,7 @@ If you need to create a release manually (outside of the automated GitHub Action
 ```
 
 This will:
+
 1. Check for uncommitted changes
 2. Run tests (if available)
 3. Bump version using commitizen

@@ -13,6 +13,7 @@ This project follows [Conventional Commits](https://www.conventionalcommits.org/
 ```
 
 ### Types
+
 - **feat**: A new feature
 - **fix**: A bug fix
 - **docs**: Documentation only changes
@@ -26,6 +27,7 @@ This project follows [Conventional Commits](https://www.conventionalcommits.org/
 - **revert**: Reverts a previous commit
 
 ### Examples
+
 ```
 feat: add file upload progress bar
 fix: handle authentication timeout errors
@@ -34,7 +36,9 @@ ci: add automated release workflow
 ```
 
 ### Breaking Changes
+
 For breaking changes, add `!` after the type or include `BREAKING CHANGE:` in the footer:
+
 ```
 feat!: change API endpoint structure
 feat: new authentication method
