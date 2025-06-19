@@ -273,13 +273,15 @@ def main():
         description="Upload files or directories to a specific user's OneDrive using app-only authentication.",
         formatter_class=argparse.RawTextHelpFormatter,
         epilog="""
-Environment Variables:
-  This script requires the following environment variables to be set for authentication:
+Environment Variables & Arguments:
+  This script requires authentication credentials. They can be provided either as
+  command-line arguments or as environment variables. If an argument is not provided,
+  the script will fall back to the corresponding environment variable.
 
-  1. ONEDRIVE_CLIENT_ID: Your Application (client) ID.
-  2. ONEDRIVE_TENANT_ID: Your Directory (tenant) ID.
-  3. ONEDRIVE_CLIENT_SECRET: Your Client Secret value.
-  4. ONEDRIVE_USER_ID: The User ID or User Principal Name (email) of the target OneDrive account.
+  1. --client-id     (ONEDRIVE_CLIENT_ID)   : Your Application (client) ID.
+  2. --tenant-id     (ONEDRIVE_TENANT_ID)   : Your Directory (tenant) ID.
+  3. --client-secret (ONEDRIVE_CLIENT_SECRET): Your Client Secret value.
+  4. --user-id       (ONEDRIVE_USER_ID)     : The User ID or User Principal Name (email) of the target OneDrive account.
 """,
     )
     parser.add_argument(
@@ -295,6 +297,30 @@ Environment Variables:
         help="The destination folder in the user's OneDrive root (e.g., 'Shared/Reports').",
         default=None,
     )
+    parser.add_argument(
+        "--client-id",
+        dest="client_id",
+        default=os.getenv("ONEDRIVE_CLIENT_ID"),
+        help="Application (client) ID. Defaults to ONEDRIVE_CLIENT_ID environment variable.",
+    )
+    parser.add_argument(
+        "--tenant-id",
+        dest="tenant_id",
+        default=os.getenv("ONEDRIVE_TENANT_ID"),
+        help="Directory (tenant) ID. Defaults to ONEDRIVE_TENANT_ID environment variable.",
+    )
+    parser.add_argument(
+        "--client-secret",
+        dest="client_secret",
+        default=os.getenv("ONEDRIVE_CLIENT_SECRET"),
+        help="Client Secret value. Defaults to ONEDRIVE_CLIENT_SECRET environment variable.",
+    )
+    parser.add_argument(
+        "--user-id",
+        dest="user_id",
+        default=os.getenv("ONEDRIVE_USER_ID"),
+        help="User ID or User Principal Name. Defaults to ONEDRIVE_USER_ID environment variable.",
+    )
 
     args = parser.parse_args()
 
@@ -302,17 +328,18 @@ Environment Variables:
         parser.print_help()
         sys.exit(0)
 
-    # --- Load Configuration from Environment ---
-    client_id = os.getenv("ONEDRIVE_CLIENT_ID")
-    tenant_id = os.getenv("ONEDRIVE_TENANT_ID")
-    client_secret = os.getenv("ONEDRIVE_CLIENT_SECRET")
-    user_id = os.getenv("ONEDRIVE_USER_ID")
+    # --- Load Configuration from args (with env var defaults) ---
+    client_id = args.client_id
+    tenant_id = args.tenant_id
+    client_secret = args.client_secret
+    user_id = args.user_id
 
     if not all([client_id, tenant_id, client_secret, user_id]):
-        print("ERROR: One or more environment variables are not set.")
+        print("ERROR: One or more required credentials are not set.")
         print(
-            "Please set ONEDRIVE_CLIENT_ID, ONEDRIVE_TENANT_ID, ONEDRIVE_CLIENT_SECRET, and ONEDRIVE_USER_ID."
+            "Please provide them as arguments (--client-id, etc.) or set the corresponding environment variables."
         )
+        print("Run with --help for more details.")
         sys.exit(1)
 
     # --- Execute Upload ---
