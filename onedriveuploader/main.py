@@ -872,24 +872,33 @@ class OneDriveUploader:
 
         # Calculate success rate
         total_attempted = (
-            self.stats["successful_uploads"] + self.stats["failed_uploads"] + self.stats["successful_downloads"] + self.stats["failed_downloads"]
+            self.stats["successful_uploads"]
+            + self.stats["failed_uploads"]
+            + self.stats["successful_downloads"]
+            + self.stats["failed_downloads"]
         )
         success_rate = (
-            (self.stats["successful_uploads"] + self.stats["successful_downloads"] / total_attempted * 100)
+            (
+                self.stats["successful_uploads"]
+                + self.stats["successful_downloads"] / total_attempted * 100
+            )
             if total_attempted > 0
             else 0
         )
 
         # Calculate upload speed
         upload_speed_mb = (
-            ((self.stats["uploaded_size"] + self.stats["downloaded_size"] )/ 1024 / 1024) / duration.total_seconds()
+            (
+                (self.stats["uploaded_size"] + self.stats["downloaded_size"])
+                / 1024
+                / 1024
+            )
+            / duration.total_seconds()
             if duration.total_seconds() > 0
             else 0
         )
 
-        summary_table.add_row(
-            "📁 Total Files", f"[bold]{total_attempted}[/bold]"
-        )
+        summary_table.add_row("📁 Total Files", f"[bold]{total_attempted}[/bold]")
         summary_table.add_row("")
         summary_table.add_row("[bold underline]📤 Uploads[/bold underline]", "")
         summary_table.add_row(
@@ -910,7 +919,8 @@ class OneDriveUploader:
             f"[bold green]{self.stats['successful_downloads']}[/bold green]",
         )
         summary_table.add_row(
-            "❌ Failed downloads", f"[bold red]{self.stats['failed_downloads']}[/bold red]"
+            "❌ Failed downloads",
+            f"[bold red]{self.stats['failed_downloads']}[/bold red]",
         )
         summary_table.add_row(
             "📥 Data Downloaded",
@@ -952,64 +962,76 @@ class OneDriveUploader:
     def list_files(self, user_id, folder_path="", recursive=False):
         """List files and folders in a OneDrive directory."""
         api_base_url = self._get_api_base_url(user_id)
-        
+
         if folder_path:
             sanitized_path = requests.utils.quote(folder_path)
             list_url = f"{api_base_url}/root:/{sanitized_path}:/children"
         else:
             list_url = f"{api_base_url}/root/children"
-        
+
         try:
+
             def list_request():
                 return requests.get(list_url, headers=self._get_headers())
-            
+
             response = self._retry_request(list_request)
             response.raise_for_status()
             data = response.json()
-            
+
             items = []
-            for item in data.get('value', []):
+            for item in data.get("value", []):
                 item_info = {
-                    'name': item['name'],
-                    'type': 'folder' if 'folder' in item else 'file',
-                    'size': item.get('size', 0),
-                    'path': f"{folder_path}/{item['name']}" if folder_path else item['name'],
-                    'download_url': item.get('@microsoft.graph.downloadUrl'),
-                    'id': item['id']
+                    "name": item["name"],
+                    "type": "folder" if "folder" in item else "file",
+                    "size": item.get("size", 0),
+                    "path": f"{folder_path}/{item['name']}"
+                    if folder_path
+                    else item["name"],
+                    "download_url": item.get("@microsoft.graph.downloadUrl"),
+                    "id": item["id"],
                 }
                 items.append(item_info)
-                
+
                 # If recursive and it's a folder, get its contents
-                if recursive and item_info['type'] == 'folder':
-                    subfolder_items = self.list_files(user_id, item_info['path'], recursive=True)
+                if recursive and item_info["type"] == "folder":
+                    subfolder_items = self.list_files(
+                        user_id, item_info["path"], recursive=True
+                    )
                     items.extend(subfolder_items)
-            
+
             return items
-            
+
         except requests.exceptions.RequestException as e:
-            console.print(f"[red]Failed to list files in {folder_path or 'root'}: {str(e)}[/red]")
+            console.print(
+                f"[red]Failed to list files in {folder_path or 'root'}: {str(e)}[/red]"
+            )
             return []
 
-    def download_file(self, user_id, remote_file_path, local_file_path, progress_callback=None):
+    def download_file(
+        self, user_id, remote_file_path, local_file_path, progress_callback=None
+    ):
         """Download a single file from OneDrive."""
         api_base_url = self._get_api_base_url(user_id)
         sanitized_path = requests.utils.quote(remote_file_path)
         download_url = f"{api_base_url}/root:/{sanitized_path}:/content"
-        
+
         try:
+
             def download_request():
-                return requests.get(download_url, headers=self._get_headers(), stream=True)
-            
+                return requests.get(
+                    download_url, headers=self._get_headers(), stream=True
+                )
+
             response = self._retry_request(download_request)
             response.raise_for_status()
-            
+
             # Create directory if it doesn't exist
             os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
-            
+
             # Get file size from headers
-            file_size = int(response.headers.get('content-length', 0))
-            
-            with open(local_file_path, 'wb') as f:
+            file_size = int(response.headers.get("content-length", 0))
+
+            with open(local_file_path, "wb") as f:
                 downloaded = 0
                 for chunk in response.iter_content(chunk_size=CHUNK_SIZE):
                     if chunk:
@@ -1017,36 +1039,42 @@ class OneDriveUploader:
                         downloaded += len(chunk)
                         if progress_callback:
                             progress_callback(len(chunk))
-            
-            self._update_stats(successful_downloads=1, downloaded_size=file_size) 
+
+            self._update_stats(successful_downloads=1, downloaded_size=file_size)
             return True
-            
+
         except requests.exceptions.RequestException as e:
             console.print(f"[red]Failed to download {remote_file_path}: {str(e)}[/red]")
-            self._update_stats(failed_downloads=1) 
+            self._update_stats(failed_downloads=1)
             return False
 
-    def download_folder(self, user_id, remote_folder_path, local_folder_path, show_progress=True):
+    def download_folder(
+        self, user_id, remote_folder_path, local_folder_path, show_progress=True
+    ):
         """Download all files from a OneDrive folder."""
         # List all files in the folder recursively
         files = self.list_files(user_id, remote_folder_path, recursive=True)
-        
+
         if not files:
-            console.print(f"[yellow]No files found in {remote_folder_path or 'root'}[/yellow]")
+            console.print(
+                f"[yellow]No files found in {remote_folder_path or 'root'}[/yellow]"
+            )
             return
-        
+
         # Filter only files (not folders)
-        files_to_download = [f for f in files if f['type'] == 'file']
-        
+        files_to_download = [f for f in files if f["type"] == "file"]
+
         if not files_to_download:
-            console.print(f"[yellow]No files found in {remote_folder_path or 'root'}[/yellow]")
+            console.print(
+                f"[yellow]No files found in {remote_folder_path or 'root'}[/yellow]"
+            )
             return
-        
-        total_size = sum(f['size'] for f in files_to_download)
+
+        total_size = sum(f["size"] for f in files_to_download)
         console.print(
             f"[cyan]📥 Starting download of {len(files_to_download)} files ({total_size / 1024 / 1024:.1f} MB) with {self.max_workers} workers...[/cyan]"
         )
-        
+
         if show_progress:
             progress = Progress(
                 TextColumn("[progress.description]{task.description}"),
@@ -1064,50 +1092,60 @@ class OneDriveUploader:
                 TimeRemainingColumn(),
                 console=console,
             )
-            
+
             with progress:
-                overall_task = progress.add_task("📦 Overall Progress", total=total_size)
+                overall_task = progress.add_task(
+                    "📦 Overall Progress", total=total_size
+                )
                 file_tasks = {}
-                
+
                 # Create individual file tasks
                 for file_info in files_to_download:
-                    display_name = truncate_path(file_info['path'], 35)
-                    task_id = progress.add_task(f"📄 {display_name}", total=file_info['size'])
-                    file_tasks[file_info['path']] = task_id
-                
+                    display_name = truncate_path(file_info["path"], 35)
+                    task_id = progress.add_task(
+                        f"📄 {display_name}", total=file_info["size"]
+                    )
+                    file_tasks[file_info["path"]] = task_id
+
                 def download_with_progress(file_info):
                     """Download a single file with progress callback."""
-                    remote_path = file_info['path']
-                    
+                    remote_path = file_info["path"]
+
                     # Calculate local path
                     if remote_folder_path:
                         # Remove the remote folder path from the beginning
-                        relative_path = remote_path[len(remote_folder_path.strip('/')) + 1:]
+                        relative_path = remote_path[
+                            len(remote_folder_path.strip("/")) + 1 :
+                        ]
                     else:
                         relative_path = remote_path
-                    
+
                     local_path = os.path.join(local_folder_path, relative_path)
-                    
+
                     def progress_callback(bytes_downloaded):
                         if remote_path in file_tasks:
-                            progress.update(file_tasks[remote_path], advance=bytes_downloaded)
+                            progress.update(
+                                file_tasks[remote_path], advance=bytes_downloaded
+                            )
                         progress.update(overall_task, advance=bytes_downloaded)
-                    
-                    return self.download_file(user_id, remote_path, local_path, progress_callback)
-                
+
+                    return self.download_file(
+                        user_id, remote_path, local_path, progress_callback
+                    )
+
                 # Download files in parallel
                 with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
                     futures = []
                     for file_info in files_to_download:
                         future = executor.submit(download_with_progress, file_info)
                         futures.append((future, file_info))
-                    
+
                     # Process completed downloads
                     for future, file_info in futures:
                         try:
                             future.result()
                         except Exception as e:
-                            display_name = truncate_path(file_info['path'], 35)
+                            display_name = truncate_path(file_info["path"], 35)
                             console.print(f"[red]❌ Failed {display_name}: {e}[/red]")
         else:
             # No progress display
@@ -1116,114 +1154,144 @@ class OneDriveUploader:
                 for file_info in files_to_download:
                     # Calculate local path
                     if remote_folder_path:
-                        relative_path = file_info['path'][len(remote_folder_path.strip('/')) + 1:]
+                        relative_path = file_info["path"][
+                            len(remote_folder_path.strip("/")) + 1 :
+                        ]
                     else:
-                        relative_path = file_info['path']
-                    
+                        relative_path = file_info["path"]
+
                     local_path = os.path.join(local_folder_path, relative_path)
-                    
-                    future = executor.submit(self.download_file, user_id, file_info['path'], local_path, None)
+
+                    future = executor.submit(
+                        self.download_file, user_id, file_info["path"], local_path, None
+                    )
                     futures.append((future, file_info))
-                
+
                 # Process completed downloads
                 completed = 0
                 for future, file_info in futures:
                     try:
                         future.result()
                         completed += 1
-                        console.print(f"[green]✅ Downloaded {completed}/{len(files_to_download)}: {os.path.basename(file_info['path'])}[/green]")
+                        console.print(
+                            f"[green]✅ Downloaded {completed}/{len(files_to_download)}: {os.path.basename(file_info['path'])}[/green]"
+                        )
                     except Exception as e:
-                        console.print(f"[red]❌ Failed {os.path.basename(file_info['path'])}: {e}[/red]")
+                        console.print(
+                            f"[red]❌ Failed {os.path.basename(file_info['path'])}: {e}[/red]"
+                        )
 
-    def download_single_file_with_progress(self, user_id, remote_file_path, local_file_path):
+    def download_single_file_with_progress(
+        self, user_id, remote_file_path, local_file_path
+    ):
         """Download a single file with enhanced progress display."""
         # Get file info first
         api_base_url = self._get_api_base_url(user_id)
         sanitized_path = requests.utils.quote(remote_file_path)
         info_url = f"{api_base_url}/root:/{sanitized_path}"
-        
+
         try:
+
             def info_request():
                 return requests.get(info_url, headers=self._get_headers())
-            
+
             response = self._retry_request(info_request)
             response.raise_for_status()
             file_info = response.json()
-            
-            filename = file_info['name']
-            file_size = file_info['size']
-            
+
+            filename = file_info["name"]
+            file_size = file_info["size"]
+
             progress = self._create_file_progress(filename, file_size)
-            
+
             with progress:
                 task = progress.add_task("", total=file_size)
-                
+
                 def progress_callback(bytes_downloaded):
                     progress.update(task, advance=bytes_downloaded)
-                
-                return self.download_file(user_id, remote_file_path, local_file_path, progress_callback)
-                
+
+                return self.download_file(
+                    user_id, remote_file_path, local_file_path, progress_callback
+                )
+
         except requests.exceptions.RequestException as e:
-            console.print(f"[red]Failed to get file info for {remote_file_path}: {str(e)}[/red]")
+            console.print(
+                f"[red]Failed to get file info for {remote_file_path}: {str(e)}[/red]"
+            )
             return False
 
-    def download_unified(self, user_id, remote_paths, local_base_path, show_progress=True):
+    def download_unified(
+        self, user_id, remote_paths, local_base_path, show_progress=True
+    ):
         """Download files and folders in a single unified progress display."""
         all_files = []
-        
+
         # Collect all files from the remote paths
         for remote_path in remote_paths:
             # Check if it's a file or folder
             api_base_url = self._get_api_base_url(user_id)
             sanitized_path = requests.utils.quote(remote_path)
             info_url = f"{api_base_url}/root:/{sanitized_path}"
-            
+
             try:
+
                 def info_request():
                     return requests.get(info_url, headers=self._get_headers())
-                
+
                 response = self._retry_request(info_request)
                 response.raise_for_status()
                 item_info = response.json()
-                
-                if 'folder' in item_info:
+
+                if "folder" in item_info:
                     # It's a folder, get all files recursively
                     folder_files = self.list_files(user_id, remote_path, recursive=True)
                     for file_info in folder_files:
-                        if file_info['type'] == 'file':
+                        if file_info["type"] == "file":
                             # Calculate local path
-                            relative_path = file_info['path'][len(remote_path.strip('/')) + 1:]
-                            local_path = os.path.join(local_base_path, os.path.basename(remote_path), relative_path)
-                            
-                            all_files.append({
-                                'remote_path': file_info['path'],
-                                'local_path': local_path,
-                                'display_path': file_info['path'],
-                                'size': file_info['size']
-                            })
+                            relative_path = file_info["path"][
+                                len(remote_path.strip("/")) + 1 :
+                            ]
+                            local_path = os.path.join(
+                                local_base_path,
+                                os.path.basename(remote_path),
+                                relative_path,
+                            )
+
+                            all_files.append(
+                                {
+                                    "remote_path": file_info["path"],
+                                    "local_path": local_path,
+                                    "display_path": file_info["path"],
+                                    "size": file_info["size"],
+                                }
+                            )
                 else:
                     # It's a file
-                    local_path = os.path.join(local_base_path, item_info['name'])
-                    all_files.append({
-                        'remote_path': remote_path,
-                        'local_path': local_path,
-                        'display_path': remote_path,
-                        'size': item_info['size']
-                    })
-                    
+                    local_path = os.path.join(local_base_path, item_info["name"])
+                    all_files.append(
+                        {
+                            "remote_path": remote_path,
+                            "local_path": local_path,
+                            "display_path": remote_path,
+                            "size": item_info["size"],
+                        }
+                    )
+
             except requests.exceptions.RequestException as e:
-                console.print(f"[red]Failed to get info for {remote_path}: {str(e)}[/red]")
+                console.print(
+                    f"[red]Failed to get info for {remote_path}: {str(e)}[/red]"
+                )
                 continue
-        
+
         if not all_files:
             console.print("[yellow]No files found to download.[/yellow]")
             return
-        
-        total_size = sum(f['size'] for f in all_files)
+
+        total_size = sum(f["size"] for f in all_files)
         console.print(
             f"[cyan]📥 Starting download of {len(all_files)} files ({total_size / 1024 / 1024:.1f} MB) with {self.max_workers} workers...[/cyan]"
         )
-        
+
         if show_progress:
             progress = Progress(
                 TextColumn("[progress.description]{task.description}"),
@@ -1241,44 +1309,52 @@ class OneDriveUploader:
                 TimeRemainingColumn(),
                 console=console,
             )
-            
+
             with progress:
-                overall_task = progress.add_task("📦 Overall Progress", total=total_size)
+                overall_task = progress.add_task(
+                    "📦 Overall Progress", total=total_size
+                )
                 file_tasks = {}
-                
+
                 # Create individual file tasks
                 for file_info in all_files:
-                    display_name = truncate_path(file_info['display_path'], 35)
-                    task_id = progress.add_task(f"📄 {display_name}", total=file_info['size'])
-                    file_tasks[file_info['remote_path']] = task_id
-                
+                    display_name = truncate_path(file_info["display_path"], 35)
+                    task_id = progress.add_task(
+                        f"📄 {display_name}", total=file_info["size"]
+                    )
+                    file_tasks[file_info["remote_path"]] = task_id
+
                 def download_with_progress(file_info):
                     """Download a single file with progress callback."""
+
                     def progress_callback(bytes_downloaded):
-                        if file_info['remote_path'] in file_tasks:
-                            progress.update(file_tasks[file_info['remote_path']], advance=bytes_downloaded)
+                        if file_info["remote_path"] in file_tasks:
+                            progress.update(
+                                file_tasks[file_info["remote_path"]],
+                                advance=bytes_downloaded,
+                            )
                         progress.update(overall_task, advance=bytes_downloaded)
-                    
+
                     return self.download_file(
-                        user_id, 
-                        file_info['remote_path'], 
-                        file_info['local_path'], 
-                        progress_callback
+                        user_id,
+                        file_info["remote_path"],
+                        file_info["local_path"],
+                        progress_callback,
                     )
-                
+
                 # Download files in parallel
                 with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
                     futures = []
                     for file_info in all_files:
                         future = executor.submit(download_with_progress, file_info)
                         futures.append((future, file_info))
-                    
+
                     # Process completed downloads
                     for future, file_info in futures:
                         try:
                             future.result()
                         except Exception as e:
-                            display_name = truncate_path(file_info['display_path'], 35)
+                            display_name = truncate_path(file_info["display_path"], 35)
                             console.print(f"[red]❌ Failed {display_name}: {e}[/red]")
         else:
             # No progress display
@@ -1286,339 +1362,351 @@ class OneDriveUploader:
                 futures = []
                 for file_info in all_files:
                     future = executor.submit(
-                        self.download_file, 
-                        user_id, 
-                        file_info['remote_path'], 
-                        file_info['local_path'], 
-                        None
+                        self.download_file,
+                        user_id,
+                        file_info["remote_path"],
+                        file_info["local_path"],
+                        None,
                     )
                     futures.append((future, file_info))
-                
+
                 # Process completed downloads
                 for future, file_info in futures:
                     try:
                         future.result()
-                        console.print(f"[green]✅ {truncate_path(file_info['display_path'], 50)}[/green]")
-                    except Exception as e:
-                        console.print(f"[red]❌ {truncate_path(file_info['display_path'], 50)}: {e}[/red]")
-
-    def main():
-        """
-        Main function to handle command-line arguments and initiate upload/download.
-        """
-        # Display header
-        console.print("\n")
-        console.print(
-            Panel(
-                "[bold blue]OneDrive Uploader/Downloader[/bold blue]\n"
-                "[dim]Professional file upload/download tool for Microsoft OneDrive[/dim]",
-                border_style="blue",
-                padding=(1, 2),
-            )
-        )
-
-        # --- Argument Parsing ---
-        parser = argparse.ArgumentParser(
-            description="Upload or download files to/from a user's OneDrive using app-only authentication.",
-            epilog="""
-            This script uses confidential client authentication. Ensure that the required
-            environment variables (ONEDRIVE_CLIENT_ID, ONEDRIVE_TENANT_ID,
-            ONEDRIVE_CLIENT_SECRET, ONEDRIVE_USER_ID) are set before running.
-            The application must be granted the 'Files.ReadWrite.All' Application Permission
-            in Azure AD and have received admin consent.
-            """,
-            formatter_class=argparse.RawDescriptionHelpFormatter,
-        )
-
-        # Add subcommands
-        subparsers = parser.add_subparsers(dest='command', help='Available commands')
-        
-        # Upload command
-        upload_parser = subparsers.add_parser('upload', help='Upload files to OneDrive')
-        upload_parser.add_argument(
-            "local_file_paths",
-            nargs="+",
-            help="The local paths to the files to upload.",
-        )
-        upload_parser.add_argument(
-            "-r",
-            "--remote-folder",
-            default="",
-            help="The destination folder in OneDrive. If not specified, uploads to the root.",
-        )
-        upload_parser.add_argument(
-            "-c",
-            "--chunk-size",
-            type=int,
-            default=CHUNK_SIZE,
-            help=f"The chunk size for large file uploads in bytes. Default is {CHUNK_SIZE} bytes.",
-        )
-        upload_parser.add_argument(
-            "--no-progress", action="store_true", help="Disable the progress bar."
-        )
-        upload_parser.add_argument(
-            "-w",
-            "--max-workers",
-            type=int,
-            default=3,
-            help="Maximum number of concurrent upload workers. Default is 3. Range: 1-10.",
-        )
-        
-        # Download command
-        download_parser = subparsers.add_parser('download', help='Download files from OneDrive')
-        download_parser.add_argument(
-            "remote_file_paths",
-            nargs="+",
-            help="The remote paths in OneDrive to download.",
-        )
-        download_parser.add_argument(
-            "-l",
-            "--local-folder",
-            default="./downloads",
-            help="The local folder to download files to. Default is './downloads'.",
-        )
-        download_parser.add_argument(
-            "-c",
-            "--chunk-size",
-            type=int,
-            default=CHUNK_SIZE,
-            help=f"The chunk size for downloads in bytes. Default is {CHUNK_SIZE} bytes.",
-        )
-        download_parser.add_argument(
-            "--no-progress", action="store_true", help="Disable the progress bar."
-        )
-        download_parser.add_argument(
-            "-w",
-            "--max-workers",
-            type=int,
-            default=3,
-            help="Maximum number of concurrent download workers. Default is 3. Range: 1-10.",
-        )
-        
-        # List command
-        list_parser = subparsers.add_parser('list', help='List files in OneDrive')
-        list_parser.add_argument(
-            "remote_folder_path",
-            nargs="?",
-            default="",
-            help="The remote folder path to list. Default is root.",
-        )
-        list_parser.add_argument(
-            "-r",
-            "--recursive",
-            action="store_true",
-            help="List files recursively.",
-        )
-
-        args = parser.parse_args()
-        
-        # If no command is specified, show help
-        if not args.command:
-            parser.print_help()
-            sys.exit(1)
-
-        # Validate max_workers argument for upload/download
-        if hasattr(args, 'max_workers') and (args.max_workers < 1 or args.max_workers > 20):
-            console.print("[red]❌ Error: max-workers must be between 1 and 20.[/red]")
-            sys.exit(1)
-
-        # --- Pre-flight Checks ---
-        console.print("\n")
-        console.print("[bold cyan]🔍 Running Pre-flight Checks...[/bold cyan]")
-
-        checks_table = Table(show_header=False, box=box.SIMPLE)
-        checks_table.add_column("Check", style="white", width=40)
-        checks_table.add_column("Status", style="white", width=15)
-
-        # Environment Variable Check
-        client_id = os.getenv("ONEDRIVE_CLIENT_ID")
-        tenant_id = os.getenv("ONEDRIVE_TENANT_ID")
-        client_secret = os.getenv("ONEDRIVE_CLIENT_SECRET")
-        user_id = os.getenv("ONEDRIVE_USER_ID")
-
-        env_vars_ok = all([client_id, tenant_id, client_secret, user_id])
-        checks_table.add_row(
-            "Environment Variables",
-            "✅ [green]PASS[/green]" if env_vars_ok else "❌ [red]FAIL[/red]",
-        )
-
-        # File existence checks (only for upload)
-        if args.command == 'upload':
-            files_exist = True
-            total_size = 0
-            for file_path in args.local_file_paths:
-                if not os.path.exists(file_path):
-                    files_exist = False
-                    break
-                if os.path.isfile(file_path):
-                    total_size += os.path.getsize(file_path)
-                elif os.path.isdir(file_path):
-                    for root, _, files in os.walk(file_path):
-                        for file in files:
-                            total_size += os.path.getsize(os.path.join(root, file))
-
-            checks_table.add_row(
-                "File/Directory Paths",
-                "✅ [green]PASS[/green]" if files_exist else "❌ [red]FAIL[/red]",
-            )
-        else:
-            files_exist = True
-            total_size = 0
-
-        # Network connectivity (basic check)
-        try:
-            import socket
-            socket.create_connection(("graph.microsoft.com", 443), timeout=5)
-            network_ok = True
-        except Exception:
-            network_ok = False
-
-        checks_table.add_row(
-            "Network Connectivity",
-            "✅ [green]PASS[/green]" if network_ok else "❌ [red]FAIL[/red]",
-        )
-
-        # Display checks
-        console.print(
-            Panel(checks_table, title="[bold]🔧 System Checks[/bold]", border_style="cyan")
-        )
-
-        # Exit if checks failed
-        if not env_vars_ok:
-            console.print(
-                "\n❌ [bold red]ERROR: Missing one or more required environment variables:"
-            )
-            console.print(
-                "[red]ONEDRIVE_CLIENT_ID, ONEDRIVE_TENANT_ID, ONEDRIVE_CLIENT_SECRET, ONEDRIVE_USER_ID"
-            )
-            sys.exit(1)
-
-        if args.command == 'upload' and not files_exist:
-            for file_path in args.local_file_paths:
-                if not os.path.exists(file_path):
-                    console.print(
-                        f"\n❌ [bold red]ERROR: The file '{file_path}' does not exist."
-                    )
-            sys.exit(1)
-
-        # --- Execute Command ---
-        try:
-            max_workers = getattr(args, 'max_workers', 3)
-            uploader = OneDriveUploader(client_id, client_secret, tenant_id, max_workers)
-
-            if args.command == 'upload':
-                # Display upload plan
-                plan_table = Table(show_header=True, box=box.SIMPLE)
-                plan_table.add_column("File/Directory", style="cyan")
-                plan_table.add_column("Type", style="white")
-                plan_table.add_column("Size", style="yellow")
-
-                for file_path in args.local_file_paths:
-                    if os.path.isfile(file_path):
-                        size = os.path.getsize(file_path)
-                        plan_table.add_row(
-                            os.path.basename(file_path), "📄 File", f"{size / 1024 / 1024:.2f} MB"
-                        )
-                    elif os.path.isdir(file_path):
-                        file_count = sum(len(files) for _, _, files in os.walk(file_path))
-                        dir_size = sum(
-                            os.path.getsize(os.path.join(root, file))
-                            for root, _, files in os.walk(file_path)
-                            for file in files
-                        )
-                        plan_table.add_row(
-                            os.path.basename(file_path),
-                            f"📁 Directory ({file_count} files)",
-                            f"{dir_size / 1024 / 1024:.2f} MB",
-                        )
-
-                plan_table.add_row("", "", "")
-                plan_table.add_row("[bold]TOTAL", "", f"[bold]{total_size / 1024 / 1024:.2f} MB")
-
-                console.print("\n")
-                console.print(
-                    Panel(
-                        plan_table,
-                        title="[bold green]📋 Upload Plan[/bold green]",
-                        border_style="green",
-                    )
-                )
-
-                # Filter out invalid paths
-                valid_paths = []
-                for local_path in args.local_file_paths:
-                    if os.path.isdir(local_path) or os.path.isfile(local_path):
-                        valid_paths.append(local_path)
-                    else:
                         console.print(
-                            f"⚠️ [yellow]WARNING: Path '{local_path}' is not a file or directory, skipping."
+                            f"[green]✅ {truncate_path(file_info['display_path'], 50)}[/green]"
+                        )
+                    except Exception as e:
+                        console.print(
+                            f"[red]❌ {truncate_path(file_info['display_path'], 50)}: {e}[/red]"
                         )
 
-                if not valid_paths:
-                    console.print("[red]❌ No valid files or directories to upload.[/red]")
-                    sys.exit(1)
 
-                # Upload all files and directories
-                uploader.upload_unified(
-                    user_id=user_id,
-                    local_paths=valid_paths,
-                    destination_folder=args.remote_folder,
-                    chunk_size=args.chunk_size,
-                    show_progress=not args.no_progress,
+def main():
+    """
+    Main function to handle command-line arguments and initiate upload/download.
+    """
+    # Display header
+    console.print("\n")
+    console.print(
+        Panel(
+            "[bold blue]OneDrive Uploader/Downloader[/bold blue]\n"
+            "[dim]Professional file upload/download tool for Microsoft OneDrive[/dim]",
+            border_style="blue",
+            padding=(1, 2),
+        )
+    )
+
+    # --- Argument Parsing ---
+    parser = argparse.ArgumentParser(
+        description="Upload or download files to/from a user's OneDrive using app-only authentication.",
+        epilog="""
+        This script uses confidential client authentication. Ensure that the required
+        environment variables (ONEDRIVE_CLIENT_ID, ONEDRIVE_TENANT_ID,
+        ONEDRIVE_CLIENT_SECRET, ONEDRIVE_USER_ID) are set before running.
+        The application must be granted the 'Files.ReadWrite.All' Application Permission
+        in Azure AD and have received admin consent.
+        """,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+    # Add subcommands
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+    # Upload command
+    upload_parser = subparsers.add_parser("upload", help="Upload files to OneDrive")
+    upload_parser.add_argument(
+        "local_file_paths",
+        nargs="+",
+        help="The local paths to the files to upload.",
+    )
+    upload_parser.add_argument(
+        "-r",
+        "--remote-folder",
+        default="",
+        help="The destination folder in OneDrive. If not specified, uploads to the root.",
+    )
+    upload_parser.add_argument(
+        "-c",
+        "--chunk-size",
+        type=int,
+        default=CHUNK_SIZE,
+        help=f"The chunk size for large file uploads in bytes. Default is {CHUNK_SIZE} bytes.",
+    )
+    upload_parser.add_argument(
+        "--no-progress", action="store_true", help="Disable the progress bar."
+    )
+    upload_parser.add_argument(
+        "-w",
+        "--max-workers",
+        type=int,
+        default=3,
+        help="Maximum number of concurrent upload workers. Default is 3. Range: 1-10.",
+    )
+
+    # Download command
+    download_parser = subparsers.add_parser(
+        "download", help="Download files from OneDrive"
+    )
+    download_parser.add_argument(
+        "remote_file_paths",
+        nargs="+",
+        help="The remote paths in OneDrive to download.",
+    )
+    download_parser.add_argument(
+        "-l",
+        "--local-folder",
+        default="./downloads",
+        help="The local folder to download files to. Default is './downloads'.",
+    )
+    download_parser.add_argument(
+        "-c",
+        "--chunk-size",
+        type=int,
+        default=CHUNK_SIZE,
+        help=f"The chunk size for downloads in bytes. Default is {CHUNK_SIZE} bytes.",
+    )
+    download_parser.add_argument(
+        "--no-progress", action="store_true", help="Disable the progress bar."
+    )
+    download_parser.add_argument(
+        "-w",
+        "--max-workers",
+        type=int,
+        default=3,
+        help="Maximum number of concurrent download workers. Default is 3. Range: 1-10.",
+    )
+
+    # List command
+    list_parser = subparsers.add_parser("list", help="List files in OneDrive")
+    list_parser.add_argument(
+        "remote_folder_path",
+        nargs="?",
+        default="",
+        help="The remote folder path to list. Default is root.",
+    )
+    list_parser.add_argument(
+        "-r",
+        "--recursive",
+        action="store_true",
+        help="List files recursively.",
+    )
+
+    args = parser.parse_args()
+
+    # If no command is specified, show help
+    if not args.command:
+        parser.print_help()
+        sys.exit(1)
+
+    # Validate max_workers argument for upload/download
+    if hasattr(args, "max_workers") and (args.max_workers < 1 or args.max_workers > 20):
+        console.print("[red]❌ Error: max-workers must be between 1 and 20.[/red]")
+        sys.exit(1)
+
+    # --- Pre-flight Checks ---
+    console.print("\n")
+    console.print("[bold cyan]🔍 Running Pre-flight Checks...[/bold cyan]")
+
+    checks_table = Table(show_header=False, box=box.SIMPLE)
+    checks_table.add_column("Check", style="white", width=40)
+    checks_table.add_column("Status", style="white", width=15)
+
+    # Environment Variable Check
+    client_id = os.getenv("ONEDRIVE_CLIENT_ID")
+    tenant_id = os.getenv("ONEDRIVE_TENANT_ID")
+    client_secret = os.getenv("ONEDRIVE_CLIENT_SECRET")
+    user_id = os.getenv("ONEDRIVE_USER_ID")
+
+    env_vars_ok = all([client_id, tenant_id, client_secret, user_id])
+    checks_table.add_row(
+        "Environment Variables",
+        "✅ [green]PASS[/green]" if env_vars_ok else "❌ [red]FAIL[/red]",
+    )
+
+    # File existence checks (only for upload)
+    if args.command == "upload":
+        files_exist = True
+        total_size = 0
+        for file_path in args.local_file_paths:
+            if not os.path.exists(file_path):
+                files_exist = False
+                break
+            if os.path.isfile(file_path):
+                total_size += os.path.getsize(file_path)
+            elif os.path.isdir(file_path):
+                for root, _, files in os.walk(file_path):
+                    for file in files:
+                        total_size += os.path.getsize(os.path.join(root, file))
+
+        checks_table.add_row(
+            "File/Directory Paths",
+            "✅ [green]PASS[/green]" if files_exist else "❌ [red]FAIL[/red]",
+        )
+    else:
+        files_exist = True
+        total_size = 0
+
+    # Network connectivity (basic check)
+    try:
+        import socket
+
+        socket.create_connection(("graph.microsoft.com", 443), timeout=5)
+        network_ok = True
+    except Exception:
+        network_ok = False
+
+    checks_table.add_row(
+        "Network Connectivity",
+        "✅ [green]PASS[/green]" if network_ok else "❌ [red]FAIL[/red]",
+    )
+
+    # Display checks
+    console.print(
+        Panel(checks_table, title="[bold]🔧 System Checks[/bold]", border_style="cyan")
+    )
+
+    # Exit if checks failed
+    if not env_vars_ok:
+        console.print(
+            "\n❌ [bold red]ERROR: Missing one or more required environment variables:"
+        )
+        console.print(
+            "[red]ONEDRIVE_CLIENT_ID, ONEDRIVE_TENANT_ID, ONEDRIVE_CLIENT_SECRET, ONEDRIVE_USER_ID"
+        )
+        sys.exit(1)
+
+    if args.command == "upload" and not files_exist:
+        for file_path in args.local_file_paths:
+            if not os.path.exists(file_path):
+                console.print(
+                    f"\n❌ [bold red]ERROR: The file '{file_path}' does not exist."
                 )
-                uploader.display_summary()
+        sys.exit(1)
 
-            elif args.command == 'download':
-                # Create local folder if it doesn't exist
-                os.makedirs(args.local_folder, exist_ok=True)
-                
-                # Download all files and directories
-                uploader.download_unified(
-                    user_id=user_id,
-                    remote_paths=args.remote_file_paths,
-                    local_base_path=args.local_folder,
-                    show_progress=not args.no_progress,
-                )
-                uploader.display_summary()
+    # --- Execute Command ---
+    try:
+        max_workers = getattr(args, "max_workers", 3)
+        uploader = OneDriveUploader(client_id, client_secret, tenant_id, max_workers)
 
-            elif args.command == 'list':
-                # List files in the specified folder
-                files = uploader.list_files(user_id, args.remote_folder_path, args.recursive)
-                
-                if not files:
-                    console.print(f"[yellow]No files found in {args.remote_folder_path or 'root'}[/yellow]")
-                else:
-                    # Display files in a table
-                    files_table = Table(show_header=True, box=box.SIMPLE)
-                    files_table.add_column("Name", style="cyan")
-                    files_table.add_column("Type", style="white")
-                    files_table.add_column("Size", style="yellow")
-                    files_table.add_column("Path", style="dim")
+        if args.command == "upload":
+            # Display upload plan
+            plan_table = Table(show_header=True, box=box.SIMPLE)
+            plan_table.add_column("File/Directory", style="cyan")
+            plan_table.add_column("Type", style="white")
+            plan_table.add_column("Size", style="yellow")
 
-                    for file_info in files:
-                        if file_info['type'] == 'file':
-                            size_str = f"{file_info['size'] / 1024 / 1024:.2f} MB"
-                            type_str = "📄 File"
-                        else:
-                            size_str = "-"
-                            type_str = "📁 Folder"
-                        
-                        files_table.add_row(
-                            file_info['name'],
-                            type_str,
-                            size_str,
-                            file_info['path']
-                        )
+            for file_path in args.local_file_paths:
+                if os.path.isfile(file_path):
+                    size = os.path.getsize(file_path)
+                    plan_table.add_row(
+                        os.path.basename(file_path),
+                        "📄 File",
+                        f"{size / 1024 / 1024:.2f} MB",
+                    )
+                elif os.path.isdir(file_path):
+                    file_count = sum(len(files) for _, _, files in os.walk(file_path))
+                    dir_size = sum(
+                        os.path.getsize(os.path.join(root, file))
+                        for root, _, files in os.walk(file_path)
+                        for file in files
+                    )
+                    plan_table.add_row(
+                        os.path.basename(file_path),
+                        f"📁 Directory ({file_count} files)",
+                        f"{dir_size / 1024 / 1024:.2f} MB",
+                    )
 
-                    console.print(f"\n[bold]Files in {args.remote_folder_path or 'root'}:[/bold]")
-                    console.print(files_table)
-            
-
-        except Exception as e:
-            console.print(
-                f"\n❌ [bold red]An unexpected error occurred: {e}"
+            plan_table.add_row("", "", "")
+            plan_table.add_row(
+                "[bold]TOTAL", "", f"[bold]{total_size / 1024 / 1024:.2f} MB"
             )
-            sys.exit(1)
+
+            console.print("\n")
+            console.print(
+                Panel(
+                    plan_table,
+                    title="[bold green]📋 Upload Plan[/bold green]",
+                    border_style="green",
+                )
+            )
+
+            # Filter out invalid paths
+            valid_paths = []
+            for local_path in args.local_file_paths:
+                if os.path.isdir(local_path) or os.path.isfile(local_path):
+                    valid_paths.append(local_path)
+                else:
+                    console.print(
+                        f"⚠️ [yellow]WARNING: Path '{local_path}' is not a file or directory, skipping."
+                    )
+
+            if not valid_paths:
+                console.print("[red]❌ No valid files or directories to upload.[/red]")
+                sys.exit(1)
+
+            # Upload all files and directories
+            uploader.upload_unified(
+                user_id=user_id,
+                local_paths=valid_paths,
+                destination_folder=args.remote_folder,
+                chunk_size=args.chunk_size,
+                show_progress=not args.no_progress,
+            )
+            uploader.display_summary()
+
+        elif args.command == "download":
+            # Create local folder if it doesn't exist
+            os.makedirs(args.local_folder, exist_ok=True)
+
+            # Download all files and directories
+            uploader.download_unified(
+                user_id=user_id,
+                remote_paths=args.remote_file_paths,
+                local_base_path=args.local_folder,
+                show_progress=not args.no_progress,
+            )
+            uploader.display_summary()
+
+        elif args.command == "list":
+            # List files in the specified folder
+            files = uploader.list_files(
+                user_id, args.remote_folder_path, args.recursive
+            )
+
+            if not files:
+                console.print(
+                    f"[yellow]No files found in {args.remote_folder_path or 'root'}[/yellow]"
+                )
+            else:
+                # Display files in a table
+                files_table = Table(show_header=True, box=box.SIMPLE)
+                files_table.add_column("Name", style="cyan")
+                files_table.add_column("Type", style="white")
+                files_table.add_column("Size", style="yellow")
+                files_table.add_column("Path", style="dim")
+
+                for file_info in files:
+                    if file_info["type"] == "file":
+                        size_str = f"{file_info['size'] / 1024 / 1024:.2f} MB"
+                        type_str = "📄 File"
+                    else:
+                        size_str = "-"
+                        type_str = "📁 Folder"
+
+                    files_table.add_row(
+                        file_info["name"], type_str, size_str, file_info["path"]
+                    )
+
+                console.print(
+                    f"\n[bold]Files in {args.remote_folder_path or 'root'}:[/bold]"
+                )
+                console.print(files_table)
+
+    except Exception as e:
+        console.print(f"\n❌ [bold red]An unexpected error occurred: {e}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
