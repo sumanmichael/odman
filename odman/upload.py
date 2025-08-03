@@ -324,7 +324,7 @@ class OneDriveUploader:
                     self.upload_any_file(
                         user_id,
                         file_info["local_path"],
-                        None,
+                        file_info["destination_path"],
                         chunk_size,
                         progress_callback,
                     )
