@@ -1027,7 +1027,9 @@ class OneDriveUploader:
             response.raise_for_status()
 
             # Create directory if it doesn't exist
-            os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
+            dir_name = os.path.dirname(local_file_path)
+            if dir_name:
+                os.makedirs(dir_name, exist_ok=True)
 
             # Get file size from headers
             file_size = int(response.headers.get("content-length", 0))
