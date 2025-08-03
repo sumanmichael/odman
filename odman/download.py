@@ -148,7 +148,8 @@ class OneDriveDownloader:
                 def download_with_progress(file_info):
                     """Download a single file with progress callback."""
                     task_id = file_tasks[file_info["path"]]
-                    local_path = os.path.join(local_folder_path, file_info["path"])
+                    rel_path = os.path.relpath(file_info["path"], remote_folder_path)
+                    local_path = os.path.join(local_folder_path, rel_path)
 
                     def progress_callback(bytes_downloaded):
                         progress.update(task_id, advance=bytes_downloaded)
