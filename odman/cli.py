@@ -290,10 +290,10 @@ def main():
 
     # Validate max_workers argument for upload/download
     if hasattr(args, "max_workers") and (
-        args.max_workers < MIN_WORKERS or args.max_workers > 20
+        args.max_workers < MIN_WORKERS or args.max_workers > MAX_WORKERS
     ):
         console.print(
-            f"[red]❌ Error: max-workers must be between {MIN_WORKERS} and 20.[/red]"
+            f"[red]❌ Error: max-workers must be between {MIN_WORKERS} and {MAX_WORKERS}.[/red]"
         )
         sys.exit(1)
 
