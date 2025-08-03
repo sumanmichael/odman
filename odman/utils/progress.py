@@ -169,7 +169,6 @@ def display_file_list(files: list[File], folder_path="root"):
 
 def display_upload_plan(file_paths):
     """Display an upload plan showing what will be uploaded."""
-    from odman.models.file import File
     from odman.utils.helpers import get_file_size_mb, get_directory_size
     import os
 

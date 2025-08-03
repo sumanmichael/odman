@@ -2,6 +2,8 @@
 
 import requests
 import time
+from urllib.parse import quote
+from typing import Callable
 from rich.console import Console
 
 from odman.core.config import GRAPH_API_ENDPOINT
@@ -40,18 +42,27 @@ class OneDriveClient:
         """Constructs the base URL for Graph API calls, targeting a specific user."""
         return f"{GRAPH_API_ENDPOINT}/users/{user_id}/drive"
 
-    def retry_request(self, func, max_retries=3, delay=1):
+    def retry_request(
+        self, func: Callable[[], requests.Response], max_retries=3, delay=1
+    ) -> requests.Response:
         """Retry a function with exponential backoff."""
+        last_exception = None
         for attempt in range(max_retries):
             try:
                 return func()
             except requests.exceptions.RequestException as e:
+                last_exception = e
                 if attempt == max_retries - 1:
                     raise e
                 console.print(
                     f"[yellow]Request failed (attempt {attempt + 1}/{max_retries}): {e}"
                 )
                 time.sleep(delay * (2**attempt))  # Exponential backoff
+
+        # This should never be reached due to the raise above, but satisfies type checker
+        if last_exception:
+            raise last_exception
+        raise RuntimeError("Unexpected error in retry_request")
 
     def ensure_remote_folder_exists(self, user_id, remote_folder_path):
         """Ensure that a remote folder path exists, creating it if necessary."""
@@ -107,7 +118,7 @@ class OneDriveClient:
         api_base_url = self.get_api_base_url(user_id)
 
         if folder_path:
-            sanitized_path = requests.utils.quote(folder_path)
+            sanitized_path = quote(folder_path)
             list_url = f"{api_base_url}/root:/{sanitized_path}:/children"
         else:
             list_url = f"{api_base_url}/root/children"
@@ -123,15 +134,7 @@ class OneDriveClient:
 
             items: list[File] = []
             for item in data.get("value", []):
-                item_path = f"{folder_path}/{item['name']}" if folder_path else item["name"]
-                
-                file_model = File(
-                    name=item["name"],
-                    type="folder" if "folder" in item else "file",
-                    size=item.get("size", 0),
-                    path=item_path,
-                )
-
+                file_model = File.from_api_response(item, folder_path)
                 items.append(file_model)
 
                 # If recursive and it's a folder, get its contents
