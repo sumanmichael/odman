@@ -879,8 +879,9 @@ class OneDriveUploader:
         )
         success_rate = (
             (
-                self.stats["successful_uploads"]
-                + self.stats["successful_downloads"] / total_attempted * 100
+                (
+                    self.stats["successful_uploads"] + self.stats["successful_downloads"]
+                ) / total_attempted * 100
             )
             if total_attempted > 0
             else 0
