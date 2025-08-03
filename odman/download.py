@@ -181,7 +181,8 @@ class OneDriveDownloader:
             with ThreadPoolExecutor(max_workers=self.client.max_workers) as executor:
                 futures = []
                 for file_info in files_to_download:
-                    local_path = os.path.join(local_folder_path, file_info["path"])
+                    relative_path = file_info["path"].lstrip("/")
+                    local_path = os.path.join(local_folder_path, relative_path)
                     future = executor.submit(
                         self.download_file, user_id, file_info["path"], local_path, None
                     )
