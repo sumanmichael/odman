@@ -353,7 +353,7 @@ class OneDriveUploader:
                         self.upload_any_file,
                         user_id,
                         file_info["local_path"],
-                        None,
+                        file_info["remote_path"],
                         chunk_size,
                         None,
                     )
