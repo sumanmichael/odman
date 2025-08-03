@@ -35,8 +35,10 @@ class OneDriveUploader:
                 file_data = f.read()
 
             def upload_request():
+                headers = self.client.auth.get_headers().copy()
+                headers["Content-Type"] = "application/octet-stream"
                 return requests.put(
-                    upload_url, headers=self.client.auth.get_headers(), data=file_data
+                    upload_url, headers=headers, data=file_data
                 )
 
             response = self.client.retry_request(upload_request)
