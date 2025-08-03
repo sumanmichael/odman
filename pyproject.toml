@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "onedriveuploader"
+name = "odman"
 version = "0.2.1"
-description = "A CLI tool to upload files to a user's OneDrive via app-only auth."
+description = "OneDrive Manager (odman) - A professional CLI tool for OneDrive file operations via app-only authentication."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -16,7 +16,7 @@ dependencies = [
 
 
 [project.scripts]
-onedriveuploader = "onedriveuploader.main:main"
+odman = "odman.cli:main"
 
 [tool.commitizen]
 name = "cz_conventional_commits"

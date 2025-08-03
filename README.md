@@ -1,6 +1,6 @@
-# OneDrive Uploader CLI
+# OneDrive Manager (odman)
 
-A command-line tool to upload, download, and list files to/from a specific user's OneDrive using Microsoft Graph API with app-only authentication. Ideal for automated scripts, backups, or any process without user interaction.
+A professional command-line tool to upload, download, and manage files in OneDrive using Microsoft Graph API with app-only authentication. Designed for automated scripts, backups, or any process requiring reliable OneDrive operations without user interaction.
 
 ## Installation
 
@@ -21,6 +21,17 @@ git clone https://github.com/sumanmichael/onedriveuploader.git
 cd onedriveuploader
 pip install .
 ```
+
+## Features
+
+✅ **Modular Architecture** - Clean, maintainable codebase with separated concerns  
+✅ **Upload Operations** - Single files, directories, or mixed file/folder sets  
+✅ **Download Operations** - Files and folders with recursive support  
+✅ **List Operations** - Browse OneDrive contents with optional recursion  
+✅ **Progress Tracking** - Rich progress bars and detailed operation summaries  
+✅ **Parallel Processing** - Configurable concurrent workers (1-10)  
+✅ **Robust Error Handling** - Retry logic with exponential backoff  
+✅ **App-only Authentication** - No user interaction required
 
 ## Release and Changelog
 
@@ -80,6 +91,7 @@ Remember to reload your shell or open a new terminal to apply the changes.
 Once configured, you can run the tool from any directory.
 
 #### Upload
+
 Upload files or folders to a user’s OneDrive.
 
 ##### Basic Upload
@@ -87,7 +99,7 @@ Upload files or folders to a user’s OneDrive.
 To upload a file to the root of the target user's OneDrive:
 
 ```sh
-onedriveuploader upload "/path/to/your/local/file.txt"
+odman upload "/path/to/your/local/file.txt"
 ```
 
 ##### Upload to a Specific Folder
@@ -95,15 +107,17 @@ onedriveuploader upload "/path/to/your/local/file.txt"
 To upload a file to a specific folder (e.g., `Documents/Backups`), use the `-d` or `--destination` flag. If the folder does not exist, it will be created.
 
 ```sh
-onedriveuploader upload "/path/to/server-backup.zip" -r "Server/DailyBackups"
+odman upload "/path/to/server-backup.zip" -r "Server/DailyBackups"
 ```
 
 ##### Upload Multiple Files
+
 ```sh
-onedriveuploader upload file1.txt file2.jpg file3.pdf
+odman upload file1.txt file2.jpg file3.pdf
 ```
 
 ##### Options
+
 - -r, --remote-folder: Destination path in OneDrive (folder will be created if missing)
 
 - -c, --chunk-size: Upload chunk size in bytes (for large files)
@@ -113,25 +127,29 @@ onedriveuploader upload file1.txt file2.jpg file3.pdf
 - --no-progress: Disable the progress bar
 
 #### Download
+
 Download files or folders from OneDrive.
 
 ##### Basic Download
 
 ```sh
-onedriveuploader download "Documents/Report.pdf"
+odman download "Documents/Report.pdf"
 ```
+
 ##### Download Multiple Files
+
 ```sh
-onedriveuploader download "Reports/2023.pdf" "Photos/Vacation/"
+odman download "Reports/2023.pdf" "Photos/Vacation/"
 ```
 
 ##### Download to Specific Local Folder
 
 ```sh
-onedriveuploader download "Docs/" -l "./local_folder"
+odman download "Docs/" -l "./local_folder"
 ```
 
 ##### Options
+
 - -l, --local-folder: Local folder to save downloaded files (default: ./downloads)
 
 - -c, --chunk-size: Chunk size for downloads (in bytes)
@@ -141,24 +159,25 @@ onedriveuploader download "Docs/" -l "./local_folder"
 - --no-progress: Disable progress bar
 
 #### List
+
 List contents of a OneDrive folder.
 
 ##### Basic List
 
 ```sh
-onedriveuploader list
+odman list
 ```
 
 ##### List a Specific Folder
 
 ```sh
-onedriveuploader list "Documents/Work"
+odman list "Documents/Work"
 ```
 
 ##### Recursive Listing
 
 ```sh
-onedriveuploader list "Projects" -r
+odman list "Projects" -r
 ```
 
 ## License
