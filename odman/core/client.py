@@ -4,9 +4,10 @@ import requests
 import time
 from rich.console import Console
 
-from .config import GRAPH_API_ENDPOINT
-from .auth import OneDriveAuth
-from .stats import OperationStats
+from odman.core.config import GRAPH_API_ENDPOINT
+from odman.core.auth import OneDriveAuth
+from odman.core.stats import OperationStats
+from odman.models.file import File
 
 console = Console()
 
@@ -101,7 +102,7 @@ class OneDriveClient:
             else:
                 current_path_for_api = part
 
-    def list_files(self, user_id, folder_path="", recursive=False):
+    def list_files(self, user_id, folder_path="", recursive=False) -> list[File]:
         """List files and folders in a OneDrive directory."""
         api_base_url = self.get_api_base_url(user_id)
 
@@ -120,23 +121,22 @@ class OneDriveClient:
             response.raise_for_status()
             data = response.json()
 
-            items = []
+            items: list[File] = []
             for item in data.get("value", []):
-                item_info = {
-                    "name": item["name"],
-                    "type": "folder" if "folder" in item else "file",
-                    "size": item.get("size", 0),
-                    "path": f"{folder_path}/{item['name']}"
-                    if folder_path
-                    else item["name"],
-                }
+                item_path = f"{folder_path}/{item['name']}" if folder_path else item["name"]
+                
+                file_model = File(
+                    name=item["name"],
+                    type="folder" if "folder" in item else "file",
+                    size=item.get("size", 0),
+                    path=item_path,
+                )
 
-                items.append(item_info)
+                items.append(file_model)
 
                 # If recursive and it's a folder, get its contents
-                if recursive and item_info["type"] == "folder":
-                    subfolder_path = item_info["path"]
-                    subitems = self.list_files(user_id, subfolder_path, recursive=True)
+                if recursive and file_model.type == "folder":
+                    subitems = self.list_files(user_id, file_model.path, recursive=True)
                     items.extend(subitems)
 
             return items

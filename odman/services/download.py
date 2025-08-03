@@ -3,11 +3,12 @@
 import os
 import requests
 from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import quote
 from rich.console import Console
 
-from .config import CHUNK_SIZE
-from .progress import create_file_progress, create_unified_progress
-from .utils import truncate_path
+from odman.core.config import CHUNK_SIZE
+from odman.utils.progress import create_file_progress, create_unified_progress
+from odman.utils.helpers import truncate_path
 
 console = Console()
 
@@ -24,7 +25,7 @@ class OneDriveDownloader:
     ):
         """Download a single file from OneDrive."""
         api_base_url = self.client.get_api_base_url(user_id)
-        sanitized_path = requests.utils.quote(remote_file_path)
+        sanitized_path = quote(remote_file_path)
         download_url = f"{api_base_url}/root:/{sanitized_path}:/content"
 
         try:
@@ -68,7 +69,7 @@ class OneDriveDownloader:
         """Download a single file with enhanced progress display."""
         # Get file info first
         api_base_url = self.client.get_api_base_url(user_id)
-        sanitized_path = requests.utils.quote(remote_file_path)
+        sanitized_path = quote(remote_file_path)
         info_url = f"{api_base_url}/root:/{sanitized_path}"
 
         try:
@@ -204,13 +205,33 @@ class OneDriveDownloader:
         self, user_id, remote_paths, local_base_path, show_progress=True
     ):
         """Download files and folders in a single unified progress display."""
+        all_files = self._collect_files_to_download(
+            user_id, remote_paths, local_base_path
+        )
+
+        if not all_files:
+            console.print("[yellow]No files found to download.[/yellow]")
+            return
+
+        total_size = sum(f["size"] for f in all_files)
+        console.print(
+            f"[cyan]📥 Starting download of {len(all_files)} files ({total_size / 1024 / 1024:.1f} MB) with {self.client.max_workers} workers...[/cyan]"
+        )
+
+        if show_progress:
+            self._download_with_progress(user_id, all_files, total_size)
+        else:
+            self._download_without_progress(user_id, all_files)
+
+    def _collect_files_to_download(self, user_id, remote_paths, local_base_path):
+        """Collect all files to download from remote paths."""
         all_files = []
 
         # Collect all files from the remote paths
         for remote_path in remote_paths:
             # Check if it's a file or folder
             api_base_url = self.client.get_api_base_url(user_id)
-            sanitized_path = requests.utils.quote(remote_path)
+            sanitized_path = quote(remote_path)
             info_url = f"{api_base_url}/root:/{sanitized_path}"
 
             try:
@@ -231,17 +252,16 @@ class OneDriveDownloader:
                     )
                     for file_info in folder_files:
                         if file_info["type"] == "file":
-                            relative_path = file_info["path"]
-                            if remote_path:
-                                # Remove the remote_path prefix to get relative path
-                                if relative_path.startswith(remote_path + "/"):
-                                    relative_path = relative_path[
-                                        len(remote_path) + 1 :
-                                    ]
-                                elif relative_path == remote_path:
-                                    relative_path = file_info["name"]
+                            # Calculate local path
+                            relative_path = file_info["path"][
+                                len(remote_path.strip("/")) + 1 :
+                            ]
+                            local_path = os.path.join(
+                                local_base_path,
+                                os.path.basename(remote_path),
+                                relative_path,
+                            )
 
-                            local_path = os.path.join(local_base_path, relative_path)
                             all_files.append(
                                 {
                                     "remote_path": file_info["path"],
@@ -268,86 +288,79 @@ class OneDriveDownloader:
                 )
                 continue
 
-        if not all_files:
-            console.print("[yellow]No files found to download.[/yellow]")
-            return
+        return all_files
 
-        total_size = sum(f["size"] for f in all_files)
-        console.print(
-            f"[cyan]📥 Starting download of {len(all_files)} files ({total_size / 1024 / 1024:.1f} MB) with {self.client.max_workers} workers...[/cyan]"
-        )
+    def _download_with_progress(self, user_id, all_files, total_size):
+        """Download files with progress display."""
+        progress = create_unified_progress()
 
-        if show_progress:
-            progress = create_unified_progress()
+        with progress:
+            overall_task = progress.add_task("📦 Overall Progress", total=total_size)
+            file_tasks = {}
 
-            with progress:
-                overall_task = progress.add_task(
-                    "📦 Overall Progress", total=total_size
+            # Create individual file tasks
+            for file_info in all_files:
+                display_name = truncate_path(file_info["display_path"], 35)
+                task_id = progress.add_task(
+                    f"📄 {display_name}", total=file_info["size"]
                 )
-                file_tasks = {}
+                file_tasks[file_info["remote_path"]] = task_id
 
-                # Create individual file tasks
-                for file_info in all_files:
-                    display_name = truncate_path(file_info["display_path"], 35)
-                    task_id = progress.add_task(
-                        f"📄 {display_name}", total=file_info["size"]
-                    )
-                    file_tasks[file_info["remote_path"]] = task_id
+            def download_with_progress(file_info):
+                """Download a single file with progress callback."""
 
-                def download_with_progress(file_info):
-                    """Download a single file with progress callback."""
-                    task_id = file_tasks[file_info["remote_path"]]
+                def progress_callback(bytes_downloaded):
+                    if file_info["remote_path"] in file_tasks:
+                        progress.update(
+                            file_tasks[file_info["remote_path"]],
+                            advance=bytes_downloaded,
+                        )
+                    progress.update(overall_task, advance=bytes_downloaded)
 
-                    def progress_callback(bytes_downloaded):
-                        progress.update(task_id, advance=bytes_downloaded)
-                        progress.update(overall_task, advance=bytes_downloaded)
+                return self.download_file(
+                    user_id,
+                    file_info["remote_path"],
+                    file_info["local_path"],
+                    progress_callback,
+                )
 
-                    return self.download_file(
-                        user_id,
-                        file_info["remote_path"],
-                        file_info["local_path"],
-                        progress_callback,
-                    )
-
-                # Download files in parallel
-                with ThreadPoolExecutor(
-                    max_workers=self.client.max_workers
-                ) as executor:
-                    futures = []
-                    for file_info in all_files:
-                        future = executor.submit(download_with_progress, file_info)
-                        futures.append((future, file_info))
-
-                    # Process completed downloads
-                    for future, file_info in futures:
-                        try:
-                            future.result()
-                        except Exception as e:
-                            console.print(
-                                f"[red]Download error for {file_info['display_path']}: {e}[/red]"
-                            )
-        else:
-            # No progress display
+            # Download files in parallel
             with ThreadPoolExecutor(max_workers=self.client.max_workers) as executor:
                 futures = []
                 for file_info in all_files:
-                    future = executor.submit(
-                        self.download_file,
-                        user_id,
-                        file_info["remote_path"],
-                        file_info["local_path"],
-                        None,
-                    )
+                    future = executor.submit(download_with_progress, file_info)
                     futures.append((future, file_info))
 
                 # Process completed downloads
                 for future, file_info in futures:
                     try:
                         future.result()
-                        console.print(
-                            f"[green]✅ {truncate_path(file_info['display_path'], 50)}[/green]"
-                        )
                     except Exception as e:
-                        console.print(
-                            f"[red]❌ {truncate_path(file_info['display_path'], 50)}: {e}[/red]"
-                        )
+                        display_name = truncate_path(file_info["display_path"], 35)
+                        console.print(f"[red]❌ Failed {display_name}: {e}[/red]")
+
+    def _download_without_progress(self, user_id, all_files):
+        """Download files without progress display."""
+        with ThreadPoolExecutor(max_workers=self.client.max_workers) as executor:
+            futures = []
+            for file_info in all_files:
+                future = executor.submit(
+                    self.download_file,
+                    user_id,
+                    file_info["remote_path"],
+                    file_info["local_path"],
+                    None,
+                )
+                futures.append((future, file_info))
+
+            # Process completed downloads
+            for future, file_info in futures:
+                try:
+                    future.result()
+                    console.print(
+                        f"[green]✅ {truncate_path(file_info['display_path'], 50)}[/green]"
+                    )
+                except Exception as e:
+                    console.print(
+                        f"[red]❌ {truncate_path(file_info['display_path'], 50)}: {e}[/red]"
+                    )

@@ -3,11 +3,12 @@
 import os
 import requests
 from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import quote
 from rich.console import Console
 
-from .config import CHUNK_SIZE, SMALL_FILE_THRESHOLD
-from .progress import create_file_progress, create_unified_progress
-from .utils import truncate_path
+from odman.core.config import CHUNK_SIZE, SMALL_FILE_THRESHOLD
+from odman.utils.progress import create_file_progress, create_unified_progress
+from odman.utils.helpers import truncate_path
 
 console = Console()
 
@@ -27,7 +28,7 @@ class OneDriveUploader:
         file_size = os.path.getsize(file_path)
 
         api_base_url = self.client.get_api_base_url(user_id)
-        sanitized_path = requests.utils.quote(destination_path)
+        sanitized_path = quote(destination_path)
         upload_url = f"{api_base_url}/root:/{sanitized_path}:/content"
 
         try:
@@ -37,9 +38,7 @@ class OneDriveUploader:
             def upload_request():
                 headers = self.client.auth.get_headers().copy()
                 headers["Content-Type"] = "application/octet-stream"
-                return requests.put(
-                    upload_url, headers=headers, data=file_data
-                )
+                return requests.put(upload_url, headers=headers, data=file_data)
 
             response = self.client.retry_request(upload_request)
             response.raise_for_status()
@@ -66,7 +65,7 @@ class OneDriveUploader:
         file_size = os.path.getsize(file_path)
 
         api_base_url = self.client.get_api_base_url(user_id)
-        sanitized_path = requests.utils.quote(destination_path)
+        sanitized_path = quote(destination_path)
         session_url = f"{api_base_url}/root:/{sanitized_path}:/createUploadSession"
         session_body = {"item": {"@microsoft.graph.conflictBehavior": "replace"}}
 
@@ -274,7 +273,6 @@ class OneDriveUploader:
         show_progress=True,
     ):
         """Upload files and directories in a single unified progress display."""
-        # Collect all files from directories and individual files
         all_files = self.collect_all_files(local_paths, destination_folder)
 
         if not all_files:
@@ -286,83 +284,97 @@ class OneDriveUploader:
             f"[cyan]🚀 Starting upload of {len(all_files)} files ({total_size / 1024 / 1024:.1f} MB) with {self.client.max_workers} workers...[/cyan]"
         )
 
-        # Create folders first (sequentially to avoid conflicts)
+        self._create_remote_folders(user_id, all_files)
+
+        if show_progress:
+            self._upload_with_progress(user_id, all_files, total_size, chunk_size)
+        else:
+            self._upload_without_progress(user_id, all_files, chunk_size)
+
+    def _create_remote_folders(self, user_id, all_files):
+        """Create all remote folders needed for the files."""
         folders_created = set()
         for file_info in all_files:
             if "remote_folder" in file_info and file_info["remote_folder"]:
-                if file_info["remote_folder"] not in folders_created:
-                    self.client.ensure_remote_folder_exists(
-                        user_id, file_info["remote_folder"]
-                    )
-                    folders_created.add(file_info["remote_folder"])
+                folder_path = file_info["remote_folder"]
+                if folder_path not in folders_created:
+                    self.client.ensure_remote_folder_exists(user_id, folder_path)
+                    folders_created.add(folder_path)
 
-        # Upload files
-        if show_progress:
-            progress = create_unified_progress()
+    def _upload_with_progress(self, user_id, all_files, total_size, chunk_size):
+        """Upload files with progress display."""
 
-            with progress:
-                overall_task = progress.add_task(
-                    "📦 Overall Progress", total=total_size
+        progress = create_unified_progress()
+
+        with progress:
+            overall_task = progress.add_task("📦 Overall Progress", total=total_size)
+            file_tasks = {}
+
+            # Create individual file tasks
+            for file_info in all_files:
+                display_name = file_info["display_name"]
+                task_id = progress.add_task(
+                    f"📄 {display_name}", total=file_info["size"]
                 )
-                file_tasks = {}
+                file_tasks[file_info["local_path"]] = task_id
 
-                # Create individual file tasks
-                for file_info in all_files:
-                    task_id = progress.add_task(
-                        f"📄 {file_info['display_name']}", total=file_info["size"]
-                    )
-                    file_tasks[file_info["local_path"]] = task_id
+            def upload_with_progress(file_info):
+                """Upload a single file with progress callback."""
+                local_path = file_info["local_path"]
 
-                def upload_with_progress(file_info):
-                    """Upload a single file with progress callback."""
-                    task_id = file_tasks[file_info["local_path"]]
+                def progress_callback(bytes_uploaded):
+                    if local_path in file_tasks:
+                        progress.update(file_tasks[local_path], advance=bytes_uploaded)
+                    progress.update(overall_task, advance=bytes_uploaded)
 
-                    def progress_callback(bytes_uploaded):
-                        progress.update(task_id, advance=bytes_uploaded)
-                        progress.update(overall_task, advance=bytes_uploaded)
+                return self.upload_any_file(
+                    user_id=user_id,
+                    file_path=local_path,
+                    destination_folder=file_info.get("remote_folder"),
+                    chunk_size=chunk_size,
+                    progress_callback=progress_callback,
+                )
 
-                    self.upload_any_file(
-                        user_id,
-                        file_info["local_path"],
-                        file_info["destination_path"],
-                        chunk_size,
-                        progress_callback,
-                    )
-
-                # Upload files in parallel
-                with ThreadPoolExecutor(
-                    max_workers=self.client.max_workers
-                ) as executor:
-                    futures = []
-                    for file_info in all_files:
-                        future = executor.submit(upload_with_progress, file_info)
-                        futures.append(future)
-
-                    # Wait for all uploads to complete
-                    for future in futures:
-                        try:
-                            future.result()
-                        except Exception as e:
-                            console.print(f"[red]Upload error: {e}[/red]")
-        else:
-            # No progress display - upload without visual feedback
+            # Upload files in parallel
             with ThreadPoolExecutor(max_workers=self.client.max_workers) as executor:
                 futures = []
                 for file_info in all_files:
-                    future = executor.submit(
-                        self.upload_any_file,
-                        user_id,
-                        file_info["local_path"],
-                        file_info["remote_path"],
-                        chunk_size,
-                        None,
-                    )
+                    future = executor.submit(upload_with_progress, file_info)
                     futures.append((future, file_info))
 
                 # Process completed uploads
                 for future, file_info in futures:
                     try:
                         future.result()
-                        console.print(f"[green]✅ {file_info['display_name']}[/green]")
                     except Exception as e:
-                        console.print(f"[red]❌ {file_info['display_name']}: {e}[/red]")
+                        console.print(
+                            f"[red]❌ Failed {file_info['display_name']}: {e}[/red]"
+                        )
+
+    def _upload_without_progress(self, user_id, all_files, chunk_size):
+        """Upload files without progress display."""
+
+        with ThreadPoolExecutor(max_workers=self.client.max_workers) as executor:
+            futures = []
+            for file_info in all_files:
+                future = executor.submit(
+                    self.upload_any_file,
+                    user_id,
+                    file_info["local_path"],
+                    file_info.get("remote_folder"),
+                    chunk_size,
+                    None,
+                )
+                futures.append((future, file_info))
+
+            # Process completed uploads
+            for future, file_info in futures:
+                try:
+                    future.result()
+                    console.print(
+                        f"[green]✅ {truncate_path(file_info['display_name'], 50)}[/green]"
+                    )
+                except Exception as e:
+                    console.print(
+                        f"[red]❌ {truncate_path(file_info['display_name'], 50)}: {e}[/red]"
+                    )

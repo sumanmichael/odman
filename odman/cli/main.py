@@ -9,13 +9,20 @@ from rich.panel import Panel
 from rich.table import Table
 from rich import box
 
-from .config import CHUNK_SIZE, DEFAULT_WORKERS, MIN_WORKERS, MAX_WORKERS
-from .auth import OneDriveAuth
-from .client import OneDriveClient
-from .upload import OneDriveUploader
-from .download import OneDriveDownloader
-from .progress import display_operation_summary, display_file_list, display_upload_plan
-from .utils import validate_path_exists, get_directory_size
+from odman.core.config import CHUNK_SIZE, DEFAULT_WORKERS, MIN_WORKERS, MAX_WORKERS
+from odman.core.auth import OneDriveAuth
+from odman.core.client import OneDriveClient
+from odman.services.upload import OneDriveUploader
+from odman.services.download import OneDriveDownloader
+from odman.utils.progress import display_operation_summary, display_file_list, display_upload_plan
+from odman.utils.helpers import validate_path_exists, get_directory_size
+from odman.models.file import File
+from ..core.auth import OneDriveAuth
+from ..core.client import OneDriveClient
+from ..services.upload import OneDriveUploader
+from ..services.download import OneDriveDownloader
+from ..utils.progress import display_operation_summary, display_file_list, display_upload_plan
+from ..utils.helpers import validate_path_exists, get_directory_size
 
 console = Console()
 
@@ -167,7 +174,7 @@ def handle_download_command(args, client):
     display_operation_summary(client.stats)
 
 
-def handle_list_command(args, client):
+def handle_list_command(args, client: OneDriveClient):
     """Handle the list command."""
     user_id = OneDriveAuth.get_user_id()
 

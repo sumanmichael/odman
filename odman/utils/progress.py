@@ -1,5 +1,6 @@
 """Progress display utilities for OneDrive Manager (odman)."""
 
+from odman.models.file import File
 from rich.progress import (
     Progress,
     TextColumn,
@@ -139,7 +140,7 @@ def display_operation_summary(stats_obj):
     )
 
 
-def display_file_list(files, folder_path="root"):
+def display_file_list(files: list[File], folder_path="root"):
     """Display a list of files in a formatted table."""
     if not files:
         console.print(f"[yellow]No files found in {folder_path}[/yellow]")
@@ -153,14 +154,14 @@ def display_file_list(files, folder_path="root"):
     files_table.add_column("Path", style="dim")
 
     for file_info in files:
-        if file_info["type"] == "file":
-            size_str = f"{file_info['size'] / 1024 / 1024:.2f} MB"
+        if file_info.type == "file":
+            size_str = f"{file_info.size / 1024 / 1024:.2f} MB"
             type_str = "📄 File"
         else:
             size_str = "-"
             type_str = "📁 Folder"
 
-        files_table.add_row(file_info["name"], type_str, size_str, file_info["path"])
+        files_table.add_row(file_info.name, type_str, size_str, file_info.path)
 
     console.print(f"\n[bold]Files in {folder_path}:[/bold]")
     console.print(files_table)
@@ -168,7 +169,8 @@ def display_file_list(files, folder_path="root"):
 
 def display_upload_plan(file_paths):
     """Display an upload plan showing what will be uploaded."""
-    from .utils import get_file_size_mb, get_directory_size
+    from odman.models.file import File
+    from odman.utils.helpers import get_file_size_mb, get_directory_size
     import os
 
     plan_table = Table(show_header=True, box=box.SIMPLE)

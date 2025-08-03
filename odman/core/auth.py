@@ -5,7 +5,7 @@ import sys
 import msal
 from rich.console import Console
 
-from .config import SCOPES, ENV_CLIENT_ID, ENV_TENANT_ID, ENV_CLIENT_SECRET, ENV_USER_ID
+from odman.core.config import SCOPES, ENV_CLIENT_ID, ENV_TENANT_ID, ENV_CLIENT_SECRET, ENV_USER_ID
 
 console = Console()
 

@@ -12,11 +12,12 @@ dependencies = [
     "msal>=1.32.3",
     "requests>=2.32.4",
     "rich>=14.0.0",
+    "python-dotenv>=1.0.0",
 ]
 
 
 [project.scripts]
-odman = "odman.cli:main"
+odman = "odman.cli.main:main"
 
 [tool.commitizen]
 name = "cz_conventional_commits"
