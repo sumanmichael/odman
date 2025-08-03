@@ -1,6 +1,6 @@
 # OneDrive Uploader CLI
 
-A command-line tool to upload files to a specific user's OneDrive using Microsoft Graph API with app-only authentication. Ideal for automated scripts, backups, or any process without user interaction.
+A command-line tool to upload, download, and list files to/from a specific user's OneDrive using Microsoft Graph API with app-only authentication. Ideal for automated scripts, backups, or any process without user interaction.
 
 ## Installation
 
@@ -75,24 +75,90 @@ $env:ONEDRIVE_USER_ID="<Target_User_ID_or_Email>"
 
 Remember to reload your shell or open a new terminal to apply the changes.
 
-### 3. Run the Uploader
+### 3. Usage
 
 Once configured, you can run the tool from any directory.
 
-#### Basic Upload
+#### Upload
+Upload files or folders to a user’s OneDrive.
+
+##### Basic Upload
 
 To upload a file to the root of the target user's OneDrive:
 
 ```sh
-onedriveuploader "/path/to/your/local/file.txt"
+onedriveuploader upload "/path/to/your/local/file.txt"
 ```
 
-#### Upload to a Specific Folder
+##### Upload to a Specific Folder
 
 To upload a file to a specific folder (e.g., `Documents/Backups`), use the `-d` or `--destination` flag. If the folder does not exist, it will be created.
 
 ```sh
-onedriveuploader "/path/to/server-backup.zip" -d "Server/DailyBackups"
+onedriveuploader upload "/path/to/server-backup.zip" -r "Server/DailyBackups"
+```
+
+##### Upload Multiple Files
+```sh
+onedriveuploader upload file1.txt file2.jpg file3.pdf
+```
+
+##### Options
+- -r, --remote-folder: Destination path in OneDrive (folder will be created if missing)
+
+- -c, --chunk-size: Upload chunk size in bytes (for large files)
+
+- -w, --max-workers: Max number of parallel uploads (default: 3)
+
+- --no-progress: Disable the progress bar
+
+#### Download
+Download files or folders from OneDrive.
+
+##### Basic Download
+
+```sh
+onedriveuploader download "Documents/Report.pdf"
+```
+##### Download Multiple Files
+```sh
+onedriveuploader download "Reports/2023.pdf" "Photos/Vacation/"
+```
+
+##### Download to Specific Local Folder
+
+```sh
+onedriveuploader download "Docs/" -l "./local_folder"
+```
+
+##### Options
+- -l, --local-folder: Local folder to save downloaded files (default: ./downloads)
+
+- -c, --chunk-size: Chunk size for downloads (in bytes)
+
+- -w, --max-workers: Max number of parallel downloads (default: 3)
+
+- --no-progress: Disable progress bar
+
+#### List
+List contents of a OneDrive folder.
+
+##### Basic List
+
+```sh
+onedriveuploader list
+```
+
+##### List a Specific Folder
+
+```sh
+onedriveuploader list "Documents/Work"
+```
+
+##### Recursive Listing
+
+```sh
+onedriveuploader list "Projects" -r
 ```
 
 ## License
