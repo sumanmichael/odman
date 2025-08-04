@@ -190,7 +190,7 @@ wheels = [
 ]
 
 [[package]]
-name = "onedriveuploader"
+name = "odman"
 version = "0.2.1"
 source = { editable = "." }
 dependencies = [
