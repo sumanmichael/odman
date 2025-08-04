@@ -9,7 +9,7 @@ A professional command-line tool to upload, download, and manage files in OneDri
 The easiest way to install the tool is with `pipx`, which installs it in an isolated environment.
 
 ```sh
-pipx install git+https://github.com/sumanmichael/onedriveuploader.git
+pipx install git+https://github.com/sumanmichael/odman.git
 ```
 
 ### Using `pip` (from source)
@@ -17,8 +17,8 @@ pipx install git+https://github.com/sumanmichael/onedriveuploader.git
 If you want to install it from a local clone (e.g., for development):
 
 ```sh
-git clone https://github.com/sumanmichael/onedriveuploader.git
-cd onedriveuploader
+git clone https://github.com/sumanmichael/odman.git
+cd odman
 pip install .
 ```
 
