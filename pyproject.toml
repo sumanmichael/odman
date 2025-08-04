@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "odman"
-version = "0.2.1"
+version = "0.3.0-alpha.0"
 description = "OneDrive Manager (odman) - A professional CLI tool for OneDrive file operations via app-only authentication."
 readme = "README.md"
 requires-python = ">=3.11"

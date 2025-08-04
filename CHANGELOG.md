@@ -1,3 +1,30 @@
+## v0.3.0-alpha.0 (2025-08-04)
+
+### Feat
+
+- Implement core OneDrive client and upload/download functionality
+- refactoring
+- Add download and list functionality; Update README.md
+
+### Fix
+
+- rename package from onedriveuploader to odman
+- update installation instructions to reflect correct repository name
+- remove version declaration and add VSCode settings for type checking
+- issue of passing None for destination_folder
+- pass the destination folder from file_info['destination_path']
+- set header to 'application/octet-stream'
+- using full remote path instead of relative path for local file placement.
+- use relative path
+- remove hardcode value for max_workers
+- ensure path before makers
+- edit in stats calc
+
+### Refactor
+
+- Clean up imports and enhance File model with API response handling
+- Improve code readability and structure; enhance progress display in upload/download functions
+
 ## v0.2.1 (2025-06-20)
 
 ### Fix

@@ -191,7 +191,7 @@ wheels = [
 
 [[package]]
 name = "odman"
-version = "0.2.1"
+version = "0.3.0-alpha.0"
 source = { editable = "." }
 dependencies = [
     { name = "msal" },
